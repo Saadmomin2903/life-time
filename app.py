@@ -40,7 +40,6 @@ if tx_data is not None:
     one_time_buyers = round(sum(lf_tx_data['frequency'] == 0) / len(lf_tx_data) * 100, 2)
     st.write(f"Percentage of customers purchase the item only once: {one_time_buyers}%")
 
-    # ... Add other parts of the code here ...
     # Frequency/Recency Analysis Using the BG/NBD Model
     st.subheader('Frequency/Recency Analysis Using the BG/NBD Model')
     bgf = BetaGeoFitter(penalizer_coef=0.0)
