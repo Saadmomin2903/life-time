@@ -476,9 +476,7 @@ class CohortAnalysis:
     
             return metrics
                 
-            except Exception as e:
-                logger.error(f"Error calculating model metrics: {str(e)}")
-                return {}
+        
         
         @staticmethod
         def validate_model_convergence(model) -> Tuple[bool, str]:
