@@ -218,6 +218,32 @@ class LifetimeValueCalculator:
             logger.error(f"Error calculating CLV: {str(e)}")
             raise
 
+    def get_model_diagnostics(self) -> Dict[str, Optional[float]]:
+        """Get model diagnostics including log-likelihood and AIC for both models"""
+        diagnostics = {
+            'bgf_log_likelihood': None,
+            'bgf_aic': None,
+            'mbgf_log_likelihood': None,
+            'mbgf_aic': None
+        }
+        
+        try:
+            # Get BG/NBD diagnostics
+            if hasattr(self.bgf, 'log_likelihood_'):
+                diagnostics['bgf_log_likelihood'] = self.bgf.log_likelihood_
+            if hasattr(self.bgf, 'AIC_'):
+                diagnostics['bgf_aic'] = self.bgf.AIC_
+                
+            # Get MBG/NBD diagnostics
+            if hasattr(self.mbgf, 'log_likelihood_'):
+                diagnostics['mbgf_log_likelihood'] = self.mbgf.log_likelihood_
+            if hasattr(self.mbgf, 'AIC_'):
+                diagnostics['mbgf_aic'] = self.mbgf.AIC_
+                
+        except Exception as e:
+            logger.warning(f"Error getting model diagnostics: {str(e)}")
+            
+        return diagnostics
 
 
 def format_diagnostic_value(value: Optional[float]) -> str:
