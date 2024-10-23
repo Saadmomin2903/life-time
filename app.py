@@ -339,258 +339,258 @@ class CohortAnalysis:
         
         return retention_matrix
 
-class ModelPersistence:
-    """Handle saving and loading of CLV models and parameters"""
-    
-    @staticmethod
-    def save_models(calculator: LifetimeValueCalculator, 
-                   params: Dict[str, Any], 
-                   path: str = "clv_models") -> None:
-        """
-        Save trained models and parameters
+    class ModelPersistence:
+        """Handle saving and loading of CLV models and parameters"""
         
-        Args:
-            calculator: Trained LifetimeValueCalculator instance
-            params: Dictionary of model parameters
-            path: Directory to save models
-        """
-        os.makedirs(path, exist_ok=True)
-        
-        # Create model metadata
-        metadata = ModelParameters(
-            penalizer_coef=calculator.bgf.penalizer_coef,
-            model_type="BG/NBD + GammaGamma",
-            training_date=datetime.now(),
-            metrics={
-                'bgf_log_likelihood': getattr(calculator.bgf, 'log_likelihood_', None),
-                'bgf_aic': getattr(calculator.bgf, 'AIC_', None),
-                'mbgf_log_likelihood': getattr(calculator.mbgf, 'log_likelihood_', None),
-                'mbgf_aic': getattr(calculator.mbgf, 'AIC_', None)
-            }
-        )
-        
-        # Save models and metadata
-        model_data = {
-            'bgf_model': calculator.bgf,
-            'mbgf_model': calculator.mbgf,
-            'ggf_model': calculator.ggf,
-            'metadata': metadata,
-            'parameters': params
-        }
-        
-        with open(os.path.join(path, f'clv_model_{datetime.now():%Y%m%d_%H%M%S}.pkl'), 'wb') as f:
-            pickle.dump(model_data, f)
-    
-    @staticmethod
-    def load_models(model_path: str) -> Tuple[LifetimeValueCalculator, Dict[str, Any], ModelParameters]:
-        """
-        Load saved models and parameters
-        
-        Args:
-            model_path: Path to saved model file
+        @staticmethod
+        def save_models(calculator: LifetimeValueCalculator, 
+                       params: Dict[str, Any], 
+                       path: str = "clv_models") -> None:
+            """
+            Save trained models and parameters
             
-        Returns:
-            Tuple of (LifetimeValueCalculator, parameters dict, metadata)
-        """
-        with open(model_path, 'rb') as f:
-            model_data = pickle.load(f)
+            Args:
+                calculator: Trained LifetimeValueCalculator instance
+                params: Dictionary of model parameters
+                path: Directory to save models
+            """
+            os.makedirs(path, exist_ok=True)
             
-        calculator = LifetimeValueCalculator()
-        calculator.bgf = model_data['bgf_model']
-        calculator.mbgf = model_data['mbgf_model']
-        calculator.ggf = model_data['ggf_model']
-        
-        return calculator, model_data['parameters'], model_data['metadata']
-
-def export_results(lf_data: pd.DataFrame, cohort_matrix: pd.DataFrame) -> None:
-    """
-    Export analysis results to CSV files
-    
-    Args:
-        lf_data: Lifetime value analysis results
-        cohort_matrix: Cohort analysis results
-    """
-    # Create exports directory if it doesn't exist
-    os.makedirs('exports', exist_ok=True)
-    
-    # Export lifetime value analysis
-    lf_export = lf_data[[
-        'frequency', 'recency', 'T', 'monetary_value',
-        'CLV_BGNBD', 'CLV_Lower', 'CLV_Upper', 'Segment_Label'
-    ]]
-    lf_export.to_csv('exports/lifetime_value_analysis.csv', index=True)
-    
-    # Export cohort analysis
-    cohort_matrix.to_csv('exports/cohort_analysis.csv', index=True)
-    
-    # Create summary statistics
-    summary_stats = pd.DataFrame({
-        'Metric': [
-            'Average CLV',
-            'Total Predicted Revenue',
-            'Number of Customers',
-            'Average Order Frequency',
-            'Average Order Value'
-        ],
-        'Value': [
-            lf_data['CLV_BGNBD'].mean(),
-            lf_data['CLV_BGNBD'].sum(),
-            len(lf_data),
-            lf_data['frequency'].mean(),
-            lf_data['monetary_value'].mean()
-        ]
-    })
-    summary_stats.to_csv('exports/summary_statistics.csv', index=False)
-    class ModelDiagnostics:
-    """Handle model diagnostics with improved validation and error handling"""
-    
-    @staticmethod
-    def calculate_model_fit_metrics(model, data) -> Dict[str, float]:
-        """Calculate comprehensive model fit metrics"""
-        metrics = {}
-        
-        try:
-            # Basic model diagnostics
-            if hasattr(model, 'log_likelihood_'):
-                metrics['log_likelihood'] = float(model.log_likelihood_)
-            if hasattr(model, 'AIC_'):
-                metrics['aic'] = float(model.AIC_)
-                
-            # Add additional model validation metrics
-            if hasattr(model, 'predict'):
-                predictions = model.predict(data['frequency'], data['recency'], data['T'])
-                actuals = data['frequency']
-                
-                # Calculate Mean Absolute Error
-                mae = np.mean(np.abs(predictions - actuals))
-                metrics['mae'] = float(mae)
-                
-                # Calculate Root Mean Square Error
-                rmse = np.sqrt(np.mean((predictions - actuals) ** 2))
-                metrics['rmse'] = float(rmse)
-                
-                # Calculate R-squared
-                ss_res = np.sum((actuals - predictions) ** 2)
-                ss_tot = np.sum((actuals - np.mean(actuals)) ** 2)
-                r2 = 1 - (ss_res / ss_tot)
-                metrics['r_squared'] = float(r2)
-            
-            return metrics
-            
-        except Exception as e:
-            logger.error(f"Error calculating model metrics: {str(e)}")
-            return {}
-
-    @staticmethod
-    def validate_model_convergence(model) -> Tuple[bool, str]:
-        """Check if model has properly converged"""
-        if not hasattr(model, 'params_'):
-            return False, "Model has not been fitted"
-            
-        # Check for invalid parameter values
-        if np.any(np.isnan(model.params_)):
-            return False, "Model contains NaN parameters"
-            
-        if np.any(np.isinf(model.params_)):
-            return False, "Model contains infinite parameters"
-            
-        # Check for reasonable parameter ranges
-        if np.any(model.params_ < 0):
-            return False, "Model contains negative parameters"
-            
-        return True, "Model convergence looks good"
-
-def display_enhanced_diagnostics(lifetime_calculator, data: pd.DataFrame):
-    """Display comprehensive model diagnostics with improved visualization"""
-    st.subheader('Enhanced Model Diagnostics')
-    
-    # Initialize diagnostics
-    diag = ModelDiagnostics()
-    
-    # Get metrics for both models
-    bgf_metrics = diag.calculate_model_fit_metrics(lifetime_calculator.bgf, data)
-    mbgf_metrics = diag.calculate_model_fit_metrics(lifetime_calculator.mbgf, data)
-    
-    # Check model convergence
-    bgf_converged, bgf_msg = diag.validate_model_convergence(lifetime_calculator.bgf)
-    mbgf_converged, mbgf_msg = diag.validate_model_convergence(lifetime_calculator.mbgf)
-    
-    # Create metrics display
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.write("### BG/NBD Model Performance")
-        st.write(f"**Convergence Status:** {'✅' if bgf_converged else '❌'}")
-        st.write(f"**Status Message:** {bgf_msg}")
-        
-        if bgf_metrics:
-            metrics_df = pd.DataFrame({
-                'Metric': list(bgf_metrics.keys()),
-                'Value': list(bgf_metrics.values())
-            })
-            st.dataframe(metrics_df.style.format({
-                'Value': '{:.4f}'
-            }))
-        else:
-            st.warning("No metrics available for BG/NBD model")
-
-    with col2:
-        st.write("### MBG/NBD Model Performance")
-        st.write(f"**Convergence Status:** {'✅' if mbgf_converged else '❌'}")
-        st.write(f"**Status Message:** {mbgf_msg}")
-        
-        if mbgf_metrics:
-            metrics_df = pd.DataFrame({
-                'Metric': list(mbgf_metrics.keys()),
-                'Value': list(mbgf_metrics.values())
-            })
-            st.dataframe(metrics_df.style.format({
-                'Value': '{:.4f}'
-            }))
-        else:
-            st.warning("No metrics available for MBG/NBD model")
-    
-    # Add metrics explanation
-    st.markdown("""
-    #### Metrics Explanation:
-    - **Log-likelihood**: Higher values indicate better model fit
-    - **AIC**: Lower values indicate better model fit while accounting for model complexity
-    - **MAE**: Mean Absolute Error - lower values indicate better predictions
-    - **RMSE**: Root Mean Square Error - lower values indicate better predictions
-    - **R-squared**: Proportion of variance explained (0-1, higher is better)
-    
-    #### Convergence Status:
-    - ✅ Green check indicates successful model convergence
-    - ❌ Red X indicates potential convergence issues
-    """)
-    
-    # Add diagnostic plots if metrics are available
-    if bgf_metrics.get('mae') is not None:
-        st.subheader('Prediction Error Analysis')
-        fig = go.Figure()
-        
-        # Add error distribution for both models
-        for model_name, metrics in [('BG/NBD', bgf_metrics), ('MBG/NBD', mbgf_metrics)]:
-            predictions = lifetime_calculator.bgf.predict(
-                data['frequency'], data['recency'], data['T']
+            # Create model metadata
+            metadata = ModelParameters(
+                penalizer_coef=calculator.bgf.penalizer_coef,
+                model_type="BG/NBD + GammaGamma",
+                training_date=datetime.now(),
+                metrics={
+                    'bgf_log_likelihood': getattr(calculator.bgf, 'log_likelihood_', None),
+                    'bgf_aic': getattr(calculator.bgf, 'AIC_', None),
+                    'mbgf_log_likelihood': getattr(calculator.mbgf, 'log_likelihood_', None),
+                    'mbgf_aic': getattr(calculator.mbgf, 'AIC_', None)
+                }
             )
-            errors = data['frequency'] - predictions
             
-            fig.add_trace(go.Histogram(
-                x=errors,
-                name=f'{model_name} Error Distribution',
-                opacity=0.7,
-                nbinsx=30
-            ))
+            # Save models and metadata
+            model_data = {
+                'bgf_model': calculator.bgf,
+                'mbgf_model': calculator.mbgf,
+                'ggf_model': calculator.ggf,
+                'metadata': metadata,
+                'parameters': params
+            }
+            
+            with open(os.path.join(path, f'clv_model_{datetime.now():%Y%m%d_%H%M%S}.pkl'), 'wb') as f:
+                pickle.dump(model_data, f)
         
-        fig.update_layout(
-            title='Model Prediction Error Distribution',
-            xaxis_title='Prediction Error',
-            yaxis_title='Count',
-            barmode='overlay'
-        )
+        @staticmethod
+        def load_models(model_path: str) -> Tuple[LifetimeValueCalculator, Dict[str, Any], ModelParameters]:
+            """
+            Load saved models and parameters
+            
+            Args:
+                model_path: Path to saved model file
+                
+            Returns:
+                Tuple of (LifetimeValueCalculator, parameters dict, metadata)
+            """
+            with open(model_path, 'rb') as f:
+                model_data = pickle.load(f)
+                
+            calculator = LifetimeValueCalculator()
+            calculator.bgf = model_data['bgf_model']
+            calculator.mbgf = model_data['mbgf_model']
+            calculator.ggf = model_data['ggf_model']
+            
+            return calculator, model_data['parameters'], model_data['metadata']
+    
+    def export_results(lf_data: pd.DataFrame, cohort_matrix: pd.DataFrame) -> None:
+        """
+        Export analysis results to CSV files
         
-        st.plotly_chart(fig, use_container_width=True)
+        Args:
+            lf_data: Lifetime value analysis results
+            cohort_matrix: Cohort analysis results
+        """
+        # Create exports directory if it doesn't exist
+        os.makedirs('exports', exist_ok=True)
+        
+        # Export lifetime value analysis
+        lf_export = lf_data[[
+            'frequency', 'recency', 'T', 'monetary_value',
+            'CLV_BGNBD', 'CLV_Lower', 'CLV_Upper', 'Segment_Label'
+        ]]
+        lf_export.to_csv('exports/lifetime_value_analysis.csv', index=True)
+        
+        # Export cohort analysis
+        cohort_matrix.to_csv('exports/cohort_analysis.csv', index=True)
+        
+        # Create summary statistics
+        summary_stats = pd.DataFrame({
+            'Metric': [
+                'Average CLV',
+                'Total Predicted Revenue',
+                'Number of Customers',
+                'Average Order Frequency',
+                'Average Order Value'
+            ],
+            'Value': [
+                lf_data['CLV_BGNBD'].mean(),
+                lf_data['CLV_BGNBD'].sum(),
+                len(lf_data),
+                lf_data['frequency'].mean(),
+                lf_data['monetary_value'].mean()
+            ]
+        })
+        summary_stats.to_csv('exports/summary_statistics.csv', index=False)
+        class ModelDiagnostics:
+        """Handle model diagnostics with improved validation and error handling"""
+        
+        @staticmethod
+        def calculate_model_fit_metrics(model, data) -> Dict[str, float]:
+            """Calculate comprehensive model fit metrics"""
+            metrics = {}
+            
+            try:
+                # Basic model diagnostics
+                if hasattr(model, 'log_likelihood_'):
+                    metrics['log_likelihood'] = float(model.log_likelihood_)
+                if hasattr(model, 'AIC_'):
+                    metrics['aic'] = float(model.AIC_)
+                    
+                # Add additional model validation metrics
+                if hasattr(model, 'predict'):
+                    predictions = model.predict(data['frequency'], data['recency'], data['T'])
+                    actuals = data['frequency']
+                    
+                    # Calculate Mean Absolute Error
+                    mae = np.mean(np.abs(predictions - actuals))
+                    metrics['mae'] = float(mae)
+                    
+                    # Calculate Root Mean Square Error
+                    rmse = np.sqrt(np.mean((predictions - actuals) ** 2))
+                    metrics['rmse'] = float(rmse)
+                    
+                    # Calculate R-squared
+                    ss_res = np.sum((actuals - predictions) ** 2)
+                    ss_tot = np.sum((actuals - np.mean(actuals)) ** 2)
+                    r2 = 1 - (ss_res / ss_tot)
+                    metrics['r_squared'] = float(r2)
+                
+                return metrics
+                
+            except Exception as e:
+                logger.error(f"Error calculating model metrics: {str(e)}")
+                return {}
+    
+        @staticmethod
+        def validate_model_convergence(model) -> Tuple[bool, str]:
+            """Check if model has properly converged"""
+            if not hasattr(model, 'params_'):
+                return False, "Model has not been fitted"
+                
+            # Check for invalid parameter values
+            if np.any(np.isnan(model.params_)):
+                return False, "Model contains NaN parameters"
+                
+            if np.any(np.isinf(model.params_)):
+                return False, "Model contains infinite parameters"
+                
+            # Check for reasonable parameter ranges
+            if np.any(model.params_ < 0):
+                return False, "Model contains negative parameters"
+                
+            return True, "Model convergence looks good"
+    
+    def display_enhanced_diagnostics(lifetime_calculator, data: pd.DataFrame):
+        """Display comprehensive model diagnostics with improved visualization"""
+        st.subheader('Enhanced Model Diagnostics')
+        
+        # Initialize diagnostics
+        diag = ModelDiagnostics()
+        
+        # Get metrics for both models
+        bgf_metrics = diag.calculate_model_fit_metrics(lifetime_calculator.bgf, data)
+        mbgf_metrics = diag.calculate_model_fit_metrics(lifetime_calculator.mbgf, data)
+        
+        # Check model convergence
+        bgf_converged, bgf_msg = diag.validate_model_convergence(lifetime_calculator.bgf)
+        mbgf_converged, mbgf_msg = diag.validate_model_convergence(lifetime_calculator.mbgf)
+        
+        # Create metrics display
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.write("### BG/NBD Model Performance")
+            st.write(f"**Convergence Status:** {'✅' if bgf_converged else '❌'}")
+            st.write(f"**Status Message:** {bgf_msg}")
+            
+            if bgf_metrics:
+                metrics_df = pd.DataFrame({
+                    'Metric': list(bgf_metrics.keys()),
+                    'Value': list(bgf_metrics.values())
+                })
+                st.dataframe(metrics_df.style.format({
+                    'Value': '{:.4f}'
+                }))
+            else:
+                st.warning("No metrics available for BG/NBD model")
+    
+        with col2:
+            st.write("### MBG/NBD Model Performance")
+            st.write(f"**Convergence Status:** {'✅' if mbgf_converged else '❌'}")
+            st.write(f"**Status Message:** {mbgf_msg}")
+            
+            if mbgf_metrics:
+                metrics_df = pd.DataFrame({
+                    'Metric': list(mbgf_metrics.keys()),
+                    'Value': list(mbgf_metrics.values())
+                })
+                st.dataframe(metrics_df.style.format({
+                    'Value': '{:.4f}'
+                }))
+            else:
+                st.warning("No metrics available for MBG/NBD model")
+        
+        # Add metrics explanation
+        st.markdown("""
+        #### Metrics Explanation:
+        - **Log-likelihood**: Higher values indicate better model fit
+        - **AIC**: Lower values indicate better model fit while accounting for model complexity
+        - **MAE**: Mean Absolute Error - lower values indicate better predictions
+        - **RMSE**: Root Mean Square Error - lower values indicate better predictions
+        - **R-squared**: Proportion of variance explained (0-1, higher is better)
+        
+        #### Convergence Status:
+        - ✅ Green check indicates successful model convergence
+        - ❌ Red X indicates potential convergence issues
+        """)
+        
+        # Add diagnostic plots if metrics are available
+        if bgf_metrics.get('mae') is not None:
+            st.subheader('Prediction Error Analysis')
+            fig = go.Figure()
+            
+            # Add error distribution for both models
+            for model_name, metrics in [('BG/NBD', bgf_metrics), ('MBG/NBD', mbgf_metrics)]:
+                predictions = lifetime_calculator.bgf.predict(
+                    data['frequency'], data['recency'], data['T']
+                )
+                errors = data['frequency'] - predictions
+                
+                fig.add_trace(go.Histogram(
+                    x=errors,
+                    name=f'{model_name} Error Distribution',
+                    opacity=0.7,
+                    nbinsx=30
+                ))
+            
+            fig.update_layout(
+                title='Model Prediction Error Distribution',
+                xaxis_title='Prediction Error',
+                yaxis_title='Count',
+                barmode='overlay'
+            )
+            
+            st.plotly_chart(fig, use_container_width=True)
 
 
 
