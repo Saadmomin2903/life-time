@@ -595,7 +595,7 @@ def display_enhanced_diagnostics(lifetime_calculator, data: pd.DataFrame):
 class DashboardUI:
     """Handle Streamlit UI components and visualization"""
     
-     def __init__(self):
+    def __init__(self):
         st.set_page_config(
             page_title="Advanced CLV Calculator",
             layout="wide",
@@ -652,6 +652,25 @@ class DashboardUI:
             }
             </style>
             """, unsafe_allow_html=True)
+
+        # Display key metrics
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric(
+                "Average CLV",
+                f"${lf_data['CLV_BGNBD'].mean():,.2f}",
+                f"±${(lf_data['CLV_Upper'] - lf_data['CLV_Lower']).mean()/2:,.2f}",
+            )
+        with col2:
+            st.metric(
+                "Total Predicted Revenue",
+                f"${lf_data['CLV_BGNBD'].sum():,.2f}"
+            )
+        with col3:
+            st.metric(
+                "High-Value Customers",
+                f"{(lf_data['CLV_BGNBD'] > lf_data['CLV_BGNBD'].quantile(0.9)).sum():,}"
+            )
     
     def render_sidebar_controls(self) -> Dict:
         """Render sidebar controls and return selected parameters"""
