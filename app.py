@@ -224,7 +224,7 @@ class LifetimeValueCalculator:
         return 'N/A'
     return f"{value:.2f}"
 
-def display_model_diagnostics(diagnostics: Dict[str, Optional[float]]):
+    def display_model_diagnostics(diagnostics: Dict[str, Optional[float]]):
     """Display model diagnostics with proper error handling"""
     col1, col2 = st.columns(2)
     
@@ -249,6 +249,8 @@ def display_model_diagnostics(diagnostics: Dict[str, Optional[float]]):
             "AIC",
             format_diagnostic_value(diagnostics['mbgf_aic'])
         )
+
+
 
 class DashboardUI:
     """Handle Streamlit UI components and visualization"""
