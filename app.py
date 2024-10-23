@@ -441,10 +441,10 @@ class CohortAnalysis:
             ]
         })
         summary_stats.to_csv('exports/summary_statistics.csv', index=False)
-        class ModelDiagnostics:
-   
-        """Handle model diagnostics with improved validation and error handling"""
     
+    class ModelDiagnostics:
+    """Handle model diagnostics with improved validation and error handling"""
+
     @staticmethod
     def calculate_model_fit_metrics(model, data) -> Dict[str, float]:
         """Calculate comprehensive model fit metrics"""
@@ -466,17 +466,15 @@ class CohortAnalysis:
                 mae = np.mean(np.abs(predictions - actuals))
                 metrics['mae'] = float(mae)
                 
-                # Calculate Root Mean Square Error
+                # Calculate Root Mean Squared Error
                 rmse = np.sqrt(np.mean((predictions - actuals) ** 2))
                 metrics['rmse'] = float(rmse)
-                
-                # Calculate R-squared
-                ss_res = np.sum((actuals - predictions) ** 2)
-                ss_tot = np.sum((actuals - np.mean(actuals)) ** 2)
-                r2 = 1 - (ss_res / ss_tot)
-                metrics['r_squared'] = float(r2)
-            
-            return metrics
+
+        except Exception as e:
+            logger.error(f"Error in calculating model fit metrics: {str(e)}")
+            raise
+
+        return metrics
             
         except Exception as e:
             logger.error(f"Error calculating model metrics: {str(e)}")
