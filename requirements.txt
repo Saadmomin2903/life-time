@@ -1,5 +1,51 @@
-Lifetimes==0.11.3
-matplotlib==3.7.0
-pandas==2.0.3
-streamlit==1.34.0
-seaborn
+# Core data processing and analysis
+pandas>=1.5.0
+numpy>=1.21.0
+
+# Web application framework
+streamlit>=1.22.0
+
+# Machine learning and statistical modeling
+scikit-learn>=1.0.2
+lifetimes>=0.11.3
+scipy>=1.7.3
+
+# Visualization libraries
+matplotlib>=3.5.0
+seaborn>=0.11.2
+plotly>=5.13.0
+
+# Interactive charts
+plotly-express>=0.4.1
+
+# Model persistence
+joblib>=1.1.0
+
+# Type checking and validation
+typing-extensions>=4.5.0
+pydantic>=1.10.0
+
+# Data export
+openpyxl>=3.0.10
+xlsxwriter>=3.0.3
+
+# Logging and debugging
+python-json-logger>=2.0.7
+
+# Progress bars
+tqdm>=4.65.0
+
+# DateTime handling
+python-dateutil>=2.8.2
+
+# Optional: Statistical analysis
+statsmodels>=0.13.5
+
+# Optional: Advanced clustering
+hdbscan>=0.8.29
+
+# Development and testing
+pytest>=7.3.1
+black>=23.3.0
+flake8>=6.0.0
+mypy>=1.2.0
