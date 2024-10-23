@@ -446,21 +446,21 @@ def main():
         )
         
         st.subheader('Model Diagnostics')
-    
-    # Get model diagnostics
-    diagnostics = calculator.get_model_diagnostics()
-    
-    # Compare BG/NBD vs MBG/NBD performance
-    col1, col2 = st.columns(2)
-    with col1:
-        st.write("BG/NBD Model Performance")
-        st.write(f"Log-likelihood: {diagnostics['bgf_log_likelihood']:.2f if diagnostics['bgf_log_likelihood'] is not None else 'N/A'}")
-        st.write(f"AIC: {diagnostics['bgf_aic']:.2f if diagnostics['bgf_aic'] is not None else 'N/A'}")
         
-    with col2:
-        st.write("MBG/NBD Model Performance")
-        st.write(f"Log-likelihood: {diagnostics['mbgf_log_likelihood']:.2f if diagnostics['mbgf_log_likelihood'] is not None else 'N/A'}")
-        st.write(f"AIC: {diagnostics['mbgf_aic']:.2f if diagnostics['mbgf_aic'] is not None else 'N/A'}")
+        # Get model diagnostics
+        diagnostics = calculator.get_model_diagnostics()
+        
+        # Compare BG/NBD vs MBG/NBD performance
+        col1, col2 = st.columns(2)
+        with col1:
+            st.write("BG/NBD Model Performance")
+            st.write(f"Log-likelihood: {diagnostics['bgf_log_likelihood']:.2f if diagnostics['bgf_log_likelihood'] is not None else 'N/A'}")
+            st.write(f"AIC: {diagnostics['bgf_aic']:.2f if diagnostics['bgf_aic'] is not None else 'N/A'}")
+            
+        with col2:
+            st.write("MBG/NBD Model Performance")
+            st.write(f"Log-likelihood: {diagnostics['mbgf_log_likelihood']:.2f if diagnostics['mbgf_log_likelihood'] is not None else 'N/A'}")
+            st.write(f"AIC: {diagnostics['mbgf_aic']:.2f if diagnostics['mbgf_aic'] is not None else 'N/A'}")
         
         # Add customer cohort analysis
         st.subheader('Cohort Analysis')
@@ -478,7 +478,7 @@ def main():
         # Add export functionality
         if st.button('Export Analysis Results'):
             export_results(lf_data, cohort_matrix)
-        
+            
     except Exception as e:
         logger.error(f"Error in main execution: {str(e)}")
         st.error(f"An error occurred: {str(e)}")
