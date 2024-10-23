@@ -443,61 +443,61 @@ class CohortAnalysis:
         summary_stats.to_csv('exports/summary_statistics.csv', index=False)
     
     class ModelDiagnostics:
-    """Handle model diagnostics with improved validation and error handling"""
+        """Handle model diagnostics with improved validation and error handling"""
 
-    @staticmethod
-    def calculate_model_fit_metrics(model, data) -> Dict[str, float]:
-        """Calculate comprehensive model fit metrics"""
-        metrics = {}
-        
-        try:
-            # Basic model diagnostics
-            if hasattr(model, 'log_likelihood_'):
-                metrics['log_likelihood'] = float(model.log_likelihood_)
-            if hasattr(model, 'AIC_'):
-                metrics['aic'] = float(model.AIC_)
-                
-            # Add additional model validation metrics
-            if hasattr(model, 'predict'):
-                predictions = model.predict(data['frequency'], data['recency'], data['T'])
-                actuals = data['frequency']
-                
-                # Calculate Mean Absolute Error
-                mae = np.mean(np.abs(predictions - actuals))
-                metrics['mae'] = float(mae)
-                
-                # Calculate Root Mean Squared Error
-                rmse = np.sqrt(np.mean((predictions - actuals) ** 2))
-                metrics['rmse'] = float(rmse)
-
-        except Exception as e:
-            logger.error(f"Error in calculating model fit metrics: {str(e)}")
-            raise
-
-        return metrics
+        @staticmethod
+        def calculate_model_fit_metrics(model, data) -> Dict[str, float]:
+            """Calculate comprehensive model fit metrics"""
+            metrics = {}
             
-        except Exception as e:
-            logger.error(f"Error calculating model metrics: {str(e)}")
-            return {}
+            try:
+                # Basic model diagnostics
+                if hasattr(model, 'log_likelihood_'):
+                    metrics['log_likelihood'] = float(model.log_likelihood_)
+                if hasattr(model, 'AIC_'):
+                    metrics['aic'] = float(model.AIC_)
+                    
+                # Add additional model validation metrics
+                if hasattr(model, 'predict'):
+                    predictions = model.predict(data['frequency'], data['recency'], data['T'])
+                    actuals = data['frequency']
+                    
+                    # Calculate Mean Absolute Error
+                    mae = np.mean(np.abs(predictions - actuals))
+                    metrics['mae'] = float(mae)
+                    
+                    # Calculate Root Mean Squared Error
+                    rmse = np.sqrt(np.mean((predictions - actuals) ** 2))
+                    metrics['rmse'] = float(rmse)
     
-    @staticmethod
-    def validate_model_convergence(model) -> Tuple[bool, str]:
-        """Check if model has properly converged"""
-        if not hasattr(model, 'params_'):
-            return False, "Model has not been fitted"
-            
-        # Check for invalid parameter values
-        if np.any(np.isnan(model.params_)):
-            return False, "Model contains NaN parameters"
-            
-        if np.any(np.isinf(model.params_)):
-            return False, "Model contains infinite parameters"
-            
-        # Check for reasonable parameter ranges
-        if np.any(model.params_ < 0):
-            return False, "Model contains negative parameters"
-            
-        return True, "Model convergence looks good"
+            except Exception as e:
+                logger.error(f"Error in calculating model fit metrics: {str(e)}")
+                raise
+    
+            return metrics
+                
+            except Exception as e:
+                logger.error(f"Error calculating model metrics: {str(e)}")
+                return {}
+        
+        @staticmethod
+        def validate_model_convergence(model) -> Tuple[bool, str]:
+            """Check if model has properly converged"""
+            if not hasattr(model, 'params_'):
+                return False, "Model has not been fitted"
+                
+            # Check for invalid parameter values
+            if np.any(np.isnan(model.params_)):
+                return False, "Model contains NaN parameters"
+                
+            if np.any(np.isinf(model.params_)):
+                return False, "Model contains infinite parameters"
+                
+            # Check for reasonable parameter ranges
+            if np.any(model.params_ < 0):
+                return False, "Model contains negative parameters"
+                
+            return True, "Model convergence looks good"
 
 def display_enhanced_diagnostics(lifetime_calculator, data: pd.DataFrame):
     """Display comprehensive model diagnostics with improved visualization"""
