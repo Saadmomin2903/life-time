@@ -441,6 +441,156 @@ def export_results(lf_data: pd.DataFrame, cohort_matrix: pd.DataFrame) -> None:
         ]
     })
     summary_stats.to_csv('exports/summary_statistics.csv', index=False)
+    class ModelDiagnostics:
+    """Handle model diagnostics with improved validation and error handling"""
+    
+    @staticmethod
+    def calculate_model_fit_metrics(model, data) -> Dict[str, float]:
+        """Calculate comprehensive model fit metrics"""
+        metrics = {}
+        
+        try:
+            # Basic model diagnostics
+            if hasattr(model, 'log_likelihood_'):
+                metrics['log_likelihood'] = float(model.log_likelihood_)
+            if hasattr(model, 'AIC_'):
+                metrics['aic'] = float(model.AIC_)
+                
+            # Add additional model validation metrics
+            if hasattr(model, 'predict'):
+                predictions = model.predict(data['frequency'], data['recency'], data['T'])
+                actuals = data['frequency']
+                
+                # Calculate Mean Absolute Error
+                mae = np.mean(np.abs(predictions - actuals))
+                metrics['mae'] = float(mae)
+                
+                # Calculate Root Mean Square Error
+                rmse = np.sqrt(np.mean((predictions - actuals) ** 2))
+                metrics['rmse'] = float(rmse)
+                
+                # Calculate R-squared
+                ss_res = np.sum((actuals - predictions) ** 2)
+                ss_tot = np.sum((actuals - np.mean(actuals)) ** 2)
+                r2 = 1 - (ss_res / ss_tot)
+                metrics['r_squared'] = float(r2)
+            
+            return metrics
+            
+        except Exception as e:
+            logger.error(f"Error calculating model metrics: {str(e)}")
+            return {}
+
+    @staticmethod
+    def validate_model_convergence(model) -> Tuple[bool, str]:
+        """Check if model has properly converged"""
+        if not hasattr(model, 'params_'):
+            return False, "Model has not been fitted"
+            
+        # Check for invalid parameter values
+        if np.any(np.isnan(model.params_)):
+            return False, "Model contains NaN parameters"
+            
+        if np.any(np.isinf(model.params_)):
+            return False, "Model contains infinite parameters"
+            
+        # Check for reasonable parameter ranges
+        if np.any(model.params_ < 0):
+            return False, "Model contains negative parameters"
+            
+        return True, "Model convergence looks good"
+
+def display_enhanced_diagnostics(lifetime_calculator, data: pd.DataFrame):
+    """Display comprehensive model diagnostics with improved visualization"""
+    st.subheader('Enhanced Model Diagnostics')
+    
+    # Initialize diagnostics
+    diag = ModelDiagnostics()
+    
+    # Get metrics for both models
+    bgf_metrics = diag.calculate_model_fit_metrics(lifetime_calculator.bgf, data)
+    mbgf_metrics = diag.calculate_model_fit_metrics(lifetime_calculator.mbgf, data)
+    
+    # Check model convergence
+    bgf_converged, bgf_msg = diag.validate_model_convergence(lifetime_calculator.bgf)
+    mbgf_converged, mbgf_msg = diag.validate_model_convergence(lifetime_calculator.mbgf)
+    
+    # Create metrics display
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.write("### BG/NBD Model Performance")
+        st.write(f"**Convergence Status:** {'✅' if bgf_converged else '❌'}")
+        st.write(f"**Status Message:** {bgf_msg}")
+        
+        if bgf_metrics:
+            metrics_df = pd.DataFrame({
+                'Metric': list(bgf_metrics.keys()),
+                'Value': list(bgf_metrics.values())
+            })
+            st.dataframe(metrics_df.style.format({
+                'Value': '{:.4f}'
+            }))
+        else:
+            st.warning("No metrics available for BG/NBD model")
+
+    with col2:
+        st.write("### MBG/NBD Model Performance")
+        st.write(f"**Convergence Status:** {'✅' if mbgf_converged else '❌'}")
+        st.write(f"**Status Message:** {mbgf_msg}")
+        
+        if mbgf_metrics:
+            metrics_df = pd.DataFrame({
+                'Metric': list(mbgf_metrics.keys()),
+                'Value': list(mbgf_metrics.values())
+            })
+            st.dataframe(metrics_df.style.format({
+                'Value': '{:.4f}'
+            }))
+        else:
+            st.warning("No metrics available for MBG/NBD model")
+    
+    # Add metrics explanation
+    st.markdown("""
+    #### Metrics Explanation:
+    - **Log-likelihood**: Higher values indicate better model fit
+    - **AIC**: Lower values indicate better model fit while accounting for model complexity
+    - **MAE**: Mean Absolute Error - lower values indicate better predictions
+    - **RMSE**: Root Mean Square Error - lower values indicate better predictions
+    - **R-squared**: Proportion of variance explained (0-1, higher is better)
+    
+    #### Convergence Status:
+    - ✅ Green check indicates successful model convergence
+    - ❌ Red X indicates potential convergence issues
+    """)
+    
+    # Add diagnostic plots if metrics are available
+    if bgf_metrics.get('mae') is not None:
+        st.subheader('Prediction Error Analysis')
+        fig = go.Figure()
+        
+        # Add error distribution for both models
+        for model_name, metrics in [('BG/NBD', bgf_metrics), ('MBG/NBD', mbgf_metrics)]:
+            predictions = lifetime_calculator.bgf.predict(
+                data['frequency'], data['recency'], data['T']
+            )
+            errors = data['frequency'] - predictions
+            
+            fig.add_trace(go.Histogram(
+                x=errors,
+                name=f'{model_name} Error Distribution',
+                opacity=0.7,
+                nbinsx=30
+            ))
+        
+        fig.update_layout(
+            title='Model Prediction Error Distribution',
+            xaxis_title='Prediction Error',
+            yaxis_title='Count',
+            barmode='overlay'
+        )
+        
+        st.plotly_chart(fig, use_container_width=True)
 
 
 
