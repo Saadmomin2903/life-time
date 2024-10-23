@@ -2,160 +2,566 @@ import pandas as pd
 import streamlit as st
 import matplotlib.pyplot as plt
 import seaborn as sns
+import numpy as np
 from lifetimes.utils import summary_data_from_transaction_data
-from lifetimes import BetaGeoFitter, GammaGammaFitter
-from datetime import datetime
-import warnings
-warnings.filterwarnings('ignore')
+from lifetimes import BetaGeoFitter, GammaGammaFitter, ModifiedBetaGeoFitter
+from datetime import datetime, timedelta
+from sklearn.cluster import KMeans
+from sklearn.preprocessing import StandardScaler
+import plotly.express as px
+import plotly.graph_objects as go
+from typing import Tuple, Dict, Optional
+import logging
+from dataclasses import dataclass
+import joblib
+import os
 
-# Set page configuration
-st.set_page_config(
-    page_title="Customer Lifetime Value Calculator",
-    layout="wide"
-)
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-# Custom CSS to improve app appearance
-st.markdown("""
-    <style>
-    .stPlot {
-        background-color: white;
-        border-radius: 5px;
-        padding: 10px;
-    }
-    .stMetric {
-        background-color: #f0f2f6;
-        padding: 10px;
-        border-radius: 5px;
-    }
-    </style>
-    """, unsafe_allow_html=True)
+@dataclass
+class ModelParameters:
+    """Store model parameters and metadata"""
+    penalizer_coef: float
+    model_type: str
+    training_date: datetime
+    metrics: Dict[str, float]
 
-@st.cache_data
-def load_data():
-    """Load and preprocess transaction data."""
-    try:
-        tx_data = pd.read_csv("OnlineRetail.csv", encoding="cp1252")
+class DataPreprocessor:
+    """Handle data preprocessing and validation"""
+    
+    def __init__(self):
+        self.scaler = StandardScaler()
         
-        # Data cleaning and preprocessing
-        tx_data['InvoiceDate'] = pd.to_datetime(tx_data['InvoiceDate'])
-        tx_data = tx_data[pd.notnull(tx_data['CustomerID'])]
-        tx_data = tx_data[tx_data['Quantity'] > 0]
-        tx_data['Total_Sales'] = tx_data['Quantity'] * tx_data['UnitPrice']
+    def validate_data(self, df: pd.DataFrame) -> bool:
+        """Validate required columns and data types"""
+        required_columns = {'CustomerID', 'InvoiceDate', 'Quantity', 'UnitPrice'}
+        if not all(col in df.columns for col in required_columns):
+            raise ValueError(f"Missing required columns: {required_columns - set(df.columns)}")
+        return True
+    
+    def clean_transactions(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Clean and preprocess transaction data"""
+        try:
+            df = df.copy()
+            # Convert date columns
+            df['InvoiceDate'] = pd.to_datetime(df['InvoiceDate'])
+            
+            # Remove invalid transactions
+            df = df[
+                (df['Quantity'] > 0) &
+                (df['UnitPrice'] > 0) &
+                (pd.notnull(df['CustomerID']))
+            ]
+            
+            # Remove outliers using IQR method
+            for col in ['Quantity', 'UnitPrice']:
+                Q1 = df[col].quantile(0.25)
+                Q3 = df[col].quantile(0.75)
+                IQR = Q3 - Q1
+                df = df[
+                    (df[col] >= Q1 - 1.5 * IQR) &
+                    (df[col] <= Q3 + 1.5 * IQR)
+                ]
+            
+            # Calculate total sales
+            df['Total_Sales'] = df['Quantity'] * df['UnitPrice']
+            
+            return df
+            
+        except Exception as e:
+            logger.error(f"Error in data cleaning: {str(e)}")
+            raise
+
+class CustomerSegmentation:
+    """Handle customer segmentation using RFM analysis and clustering"""
+    
+    def __init__(self, n_clusters: int = 4):
+        self.n_clusters = n_clusters
+        self.kmeans = KMeans(n_clusters=n_clusters, random_state=42)
+        self.scaler = StandardScaler()
         
-        return tx_data
-    except Exception as e:
-        st.error(f"Error loading data: {e}")
-        return None
-
-def create_summary_metrics(lf_tx_data):
-    """Create summary metrics for the dashboard."""
-    col1, col2, col3 = st.columns(3)
+    def create_rfm_segments(self, lf_data: pd.DataFrame) -> pd.DataFrame:
+        """Create RFM segments using K-means clustering"""
+        # Prepare RFM data for clustering
+        rfm_data = self.scaler.fit_transform(
+            lf_data[['recency', 'frequency', 'monetary_value']]
+        )
+        
+        # Perform clustering
+        lf_data['Segment'] = self.kmeans.fit_predict(rfm_data)
+        
+        # Label segments based on characteristics
+        segment_labels = self._assign_segment_labels(lf_data)
+        lf_data['Segment_Label'] = lf_data['Segment'].map(segment_labels)
+        
+        return lf_data
     
-    with col1:
-        st.metric("Total Customers", f"{lf_tx_data.index.nunique():,}")
-    with col2:
-        avg_frequency = lf_tx_data['frequency'].mean()
-        st.metric("Average Purchase Frequency", f"{avg_frequency:.2f}")
-    with col3:
-        avg_monetary = lf_tx_data['monetary_value'].mean()
-        st.metric("Average Order Value", f"${avg_monetary:.2f}")
+    def _assign_segment_labels(self, data: pd.DataFrame) -> Dict[int, str]:
+        """Assign meaningful labels to segments based on their characteristics"""
+        segment_stats = data.groupby('Segment').agg({
+            'recency': 'mean',
+            'frequency': 'mean',
+            'monetary_value': 'mean'
+        })
+        
+        # Create meaningful labels based on segment characteristics
+        labels = {}
+        for segment in range(self.n_clusters):
+            stats = segment_stats.loc[segment]
+            if stats['frequency'] > segment_stats['frequency'].median():
+                if stats['monetary_value'] > segment_stats['monetary_value'].median():
+                    labels[segment] = 'High-Value Loyal'
+                else:
+                    labels[segment] = 'Frequent Budget'
+            else:
+                if stats['recency'] < segment_stats['recency'].median():
+                    labels[segment] = 'Recent One-Time'
+                else:
+                    labels[segment] = 'Lost Customers'
+                    
+        return labels
 
-def plot_frequency_histogram(lf_tx_data):
-    """Create purchase frequency histogram."""
-    fig, ax = plt.subplots(figsize=(10, 6))
-    sns.histplot(data=lf_tx_data, x='frequency', bins=50, ax=ax)
-    ax.set_title('Purchase Frequency Distribution')
-    ax.set_xlabel('Number of Repeat Purchases')
-    ax.set_ylabel('Count of Customers')
-    st.pyplot(fig)
-    plt.close()
-
-def train_models(lf_tx_data):
-    """Train BG/NBD and Gamma-Gamma models."""
-    # BG/NBD model
-    bgf = BetaGeoFitter(penalizer_coef=0.0)
-    bgf.fit(lf_tx_data['frequency'], lf_tx_data['recency'], lf_tx_data['T'])
+class LifetimeValueCalculator:
+    """Handle CLV calculations and predictions"""
     
-    # Gamma-Gamma model
-    ggf = GammaGammaFitter(penalizer_coef=0)
-    shortlisted_customers = lf_tx_data[lf_tx_data['frequency'] > 0]
-    ggf.fit(shortlisted_customers['frequency'], shortlisted_customers['monetary_value'])
+    def __init__(self, bgf_penalizer: float = 0.0, ggf_penalizer: float = 0.0):
+        self.bgf = BetaGeoFitter(penalizer_coef=bgf_penalizer)
+        self.mbgf = ModifiedBetaGeoFitter(penalizer_coef=bgf_penalizer)
+        self.ggf = GammaGammaFitter(penalizer_coef=ggf_penalizer)
+        
+    def fit_models(self, lf_data: pd.DataFrame) -> None:
+        """Fit BG/NBD and Gamma-Gamma models"""
+        # Fit BG/NBD model
+        self.bgf.fit(
+            lf_data['frequency'],
+            lf_data['recency'],
+            lf_data['T']
+        )
+        
+        # Fit Modified BG/NBD model for comparison
+        self.mbgf.fit(
+            lf_data['frequency'],
+            lf_data['recency'],
+            lf_data['T']
+        )
+        
+        # Fit Gamma-Gamma model
+        purchase_data = lf_data[lf_data['frequency'] > 0]
+        self.ggf.fit(
+            purchase_data['frequency'],
+            purchase_data['monetary_value']
+        )
     
-    return bgf, ggf
+    def calculate_clv(self, lf_data: pd.DataFrame, time_horizon: int = 12,
+                     discount_rate: float = 0.01) -> pd.DataFrame:
+        """Calculate CLV using both models and compare results"""
+        # Calculate CLV using BG/NBD
+        lf_data['CLV_BGNBD'] = self.ggf.customer_lifetime_value(
+            self.bgf,
+            lf_data['frequency'],
+            lf_data['recency'],
+            lf_data['T'],
+            lf_data['monetary_value'],
+            time=time_horizon,
+            discount_rate=discount_rate
+        )
+        
+        # Calculate CLV using MBG/NBD
+        lf_data['CLV_MBGNBD'] = self.ggf.customer_lifetime_value(
+            self.mbgf,
+            lf_data['frequency'],
+            lf_data['recency'],
+            lf_data['T'],
+            lf_data['monetary_value'],
+            time=time_horizon,
+            discount_rate=discount_rate
+        )
+        
+        # Calculate confidence intervals
+        lf_data['CLV_Lower'], lf_data['CLV_Upper'] = self._calculate_clv_confidence_intervals(
+            lf_data, time_horizon, discount_rate
+        )
+        
+        return lf_data
+    
+    def _calculate_clv_confidence_intervals(self, lf_data: pd.DataFrame,
+                                         time_horizon: int, discount_rate: float,
+                                         confidence: float = 0.95) -> Tuple[pd.Series, pd.Series]:
+        """Calculate confidence intervals for CLV predictions using bootstrap"""
+        n_samples = 1000
+        clv_samples = np.zeros((len(lf_data), n_samples))
+        
+        for i in range(n_samples):
+            # Resample parameters
+            sample_bgf = self.bgf.bootstrap()
+            sample_ggf = self.ggf.bootstrap()
+            
+            # Calculate CLV with sampled parameters
+            clv_samples[:, i] = sample_ggf.customer_lifetime_value(
+                sample_bgf,
+                lf_data['frequency'],
+                lf_data['recency'],
+                lf_data['T'],
+                lf_data['monetary_value'],
+                time=time_horizon,
+                discount_rate=discount_rate
+            )
+        
+        # Calculate confidence intervals
+        lower = np.percentile(clv_samples, ((1 - confidence) / 2) * 100, axis=1)
+        upper = np.percentile(clv_samples, (1 - (1 - confidence) / 2) * 100, axis=1)
+        
+        return pd.Series(lower), pd.Series(upper)
 
-def calculate_clv(bgf, ggf, lf_tx_data):
-    """Calculate Customer Lifetime Value."""
-    lf_tx_data['CLV'] = ggf.customer_lifetime_value(
-        bgf,
-        lf_tx_data['frequency'],
-        lf_tx_data['recency'],
-        lf_tx_data['T'],
-        lf_tx_data['monetary_value'],
-        time=12,
-        discount_rate=0.01
-    )
-    return lf_tx_data
+class DashboardUI:
+    """Handle Streamlit UI components and visualization"""
+    
+    def __init__(self):
+        st.set_page_config(
+            page_title="Advanced CLV Calculator",
+            layout="wide",
+            initial_sidebar_state="expanded"
+        )
+        self._apply_custom_css()
+    
+    def _apply_custom_css(self):
+        """Apply custom CSS styling"""
+        st.markdown("""
+            <style>
+            .stPlot {
+                background-color: white;
+                border-radius: 5px;
+                padding: 10px;
+                box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            }
+            .stMetric {
+                background-color: #f0f2f6;
+                padding: 15px;
+                border-radius: 5px;
+                box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            }
+            .segment-high {
+                color: #28a745;
+                font-weight: bold;
+            }
+            .segment-medium {
+                color: #ffc107;
+                font-weight: bold;
+            }
+            .segment-low {
+                color: #dc3545;
+                font-weight: bold;
+            }
+            </style>
+            """, unsafe_allow_html=True)
+    
+    def render_sidebar_controls(self) -> Dict:
+        """Render sidebar controls and return selected parameters"""
+        st.sidebar.title("Analysis Parameters")
+        
+        params = {
+            'prediction_period': st.sidebar.slider(
+                'Prediction Period (days)',
+                1, 365, 30
+            ),
+            'discount_rate': st.sidebar.slider(
+                'Discount Rate',
+                0.0, 0.2, 0.01, 0.01
+            ),
+            'n_clusters': st.sidebar.slider(
+                'Number of Customer Segments',
+                2, 8, 4
+            )
+        }
+        
+        return params
+    
+    def plot_customer_segments(self, data: pd.DataFrame):
+        """Create interactive 3D scatter plot of customer segments"""
+        fig = px.scatter_3d(
+            data,
+            x='recency',
+            y='frequency',
+            z='monetary_value',
+            color='Segment_Label',
+            title='Customer Segments (3D View)',
+            labels={
+                'recency': 'Recency (days)',
+                'frequency': 'Frequency',
+                'monetary_value': 'Monetary Value ($)'
+            }
+        )
+        st.plotly_chart(fig, use_container_width=True)
+    
+    def plot_clv_distribution(self, data: pd.DataFrame):
+        """Plot CLV distribution with confidence intervals"""
+        fig = go.Figure()
+        
+        # Add CLV distribution
+        fig.add_trace(go.Histogram(
+            x=data['CLV_BGNBD'],
+            name='CLV Distribution',
+            nbinsx=50
+        ))
+        
+        # Add confidence interval markers
+        fig.add_vline(
+            x=data['CLV_Lower'].mean(),
+            line_dash="dash",
+            annotation_text="95% CI Lower"
+        )
+        fig.add_vline(
+            x=data['CLV_Upper'].mean(),
+            line_dash="dash",
+            annotation_text="95% CI Upper"
+        )
+        
+        fig.update_layout(
+            title='Customer Lifetime Value Distribution',
+            xaxis_title='Predicted CLV ($)',
+            yaxis_title='Number of Customers'
+        )
+        
+        st.plotly_chart(fig, use_container_width=True)
 
 def main():
-    st.title('Customer Lifetime Value Calculator')
+    # Initialize components
+    ui = DashboardUI()
+    preprocessor = DataPreprocessor()
     
-    # Load data
-    tx_data = load_data()
-    
-    if tx_data is not None:
-        # Calculate observation period end
-        observation_period_end = tx_data['InvoiceDate'].max()
+    try:
+        # Load and preprocess data
+        raw_data = pd.read_csv("OnlineRetail.csv", encoding="cp1252")
+        preprocessor.validate_data(raw_data)
+        clean_data = preprocessor.clean_transactions(raw_data)
+        
+        # Get analysis parameters
+        params = ui.render_sidebar_controls()
         
         # Create lifetime value summary
-        lf_tx_data = summary_data_from_transaction_data(
-            tx_data,
+        observation_period_end = clean_data['InvoiceDate'].max()
+        lf_data = summary_data_from_transaction_data(
+            clean_data,
             'CustomerID',
             'InvoiceDate',
             monetary_value_col='Total_Sales',
             observation_period_end=observation_period_end
         )
         
-        # Display summary metrics
-        create_summary_metrics(lf_tx_data)
+        # Perform customer segmentation
+        segmentation = CustomerSegmentation(n_clusters=params['n_clusters'])
+        lf_data = segmentation.create_rfm_segments(lf_data)
         
-        # Display frequency histogram
-        st.subheader('Purchase Patterns Analysis')
-        plot_frequency_histogram(lf_tx_data)
-        
-        # Calculate and display one-time buyers percentage
-        one_time_buyers = round(sum(lf_tx_data['frequency'] == 0) / len(lf_tx_data) * 100, 2)
-        st.info(f"📊 {one_time_buyers}% of customers are one-time buyers")
-        
-        # Train models
-        with st.spinner('Training models...'):
-            bgf, ggf = train_models(lf_tx_data)
-        
-        # Predict future transactions
-        st.subheader('Future Transaction Predictions')
-        prediction_period = st.slider('Select prediction period (days)', 1, 365, 30)
-        
-        lf_tx_data['predicted_purchases'] = bgf.conditional_expected_number_of_purchases_up_to_time(
-            prediction_period,
-            lf_tx_data['frequency'],
-            lf_tx_data['recency'],
-            lf_tx_data['T']
+        # Calculate CLV
+        calculator = LifetimeValueCalculator()
+        calculator.fit_models(lf_data)
+        lf_data = calculator.calculate_clv(
+            lf_data,
+            time_horizon=params['prediction_period'],
+            discount_rate=params['discount_rate']
         )
         
-        # Calculate and display CLV
-        lf_tx_data = calculate_clv(bgf, ggf, lf_tx_data)
+        # Display visualizations
+        st.title('Advanced Customer Lifetime Value Analysis')
         
-        # Display top customers
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric(
+                "Average CLV",
+                f"${lf_data['CLV_BGNBD'].mean():,.2f}",
+                f"±${(lf_data['CLV_Upper'] - lf_data['CLV_Lower']).mean()/2:,.2f}"
+            )
+        with col2:
+            st.metric(
+                "Total Predicted Revenue",
+                f"${lf_data['CLV_BGNBD'].sum():,.2f}"
+            )
+        with col3:
+            st.metric(
+                "High-Value Customers",
+                f"{(lf_data['CLV_BGNBD'] > lf_data['CLV_BGNBD'].quantile(0.9)).sum():,}"
+            )
+        
+        # Display segment analysis
+        st.subheader('Customer Segmentation Analysis')
+        ui.plot_customer_segments(lf_data)
+        
+        # Display CLV distribution
+        st.subheader('CLV Distribution Analysis')
+        ui.plot_clv_distribution(lf_data)
+        
+        # Display top customers table
         st.subheader('Top Customers by Predicted CLV')
-        top_customers = lf_tx_data.sort_values('CLV', ascending=False).head(10)
-        
+        top_customers = lf_data.nlargest(10, 'CLV_BGNBD')
         st.dataframe(
-            top_customers[['frequency', 'recency', 'T', 'monetary_value', 'predicted_purchases', 'CLV']]
+            top_customers[[
+                'frequency', 'recency', 'monetary_value', 'CLV_BGNBD', 
+                'CLV_Lower', 'CLV_Upper', 'Segment_Label'
+            ]]
             .style.format({
-                'CLV': '${:,.2f}',
+                'CLV_BGNBD': '${:,.2f}',
+                'CLV_Lower': '${:,.2f}',
+                'CLV_Upper': '${:,.2f}',
                 'monetary_value': '${:,.2f}',
-                'predicted_purchases': '{:,.1f}'
+                'recency': '{:.1f}',
+                'frequency': '{:.0f}'
             })
         )
+        
+        # Add model comparison and diagnostics
+        st.subheader('Model Diagnostics')
+        
+        # Compare BG/NBD vs MBG/NBD performance
+        col1, col2 = st.columns(2)
+        with col1:
+            st.write("BG/NBD Model Performance")
+            st.write(f"Log-likelihood: {calculator.bgf.log_likelihood_:.2f}")
+            st.write(f"AIC: {calculator.bgf.AIC_:.2f}")
+            
+        with col2:
+            st.write("MBG/NBD Model Performance")
+            st.write(f"Log-likelihood: {calculator.mbgf.log_likelihood_:.2f}")
+            st.write(f"AIC: {calculator.mbgf.AIC_:.2f}")
+        
+        # Add customer cohort analysis
+        st.subheader('Cohort Analysis')
+        cohort_analysis = CohortAnalysis(clean_data)
+        cohort_matrix = cohort_analysis.create_cohort_matrix()
+        
+        # Plot cohort heatmap
+        fig = px.imshow(
+            cohort_matrix,
+            labels=dict(x="Cohort Period", y="Cohort Group", color="Retention Rate"),
+            title="Customer Cohort Analysis"
+        )
+        st.plotly_chart(fig, use_container_width=True)
+        
+        # Add export functionality
+        if st.button('Export Analysis Results'):
+            export_results(lf_data, cohort_matrix)
+        
+    except Exception as e:
+        logger.error(f"Error in main execution: {str(e)}")
+        st.error(f"An error occurred: {str(e)}")
+
+class CohortAnalysis:
+    """Handle customer cohort analysis"""
+    
+    def __init__(self, transaction_data: pd.DataFrame):
+        self.data = transaction_data
+        
+    def create_cohort_matrix(self) -> pd.DataFrame:
+        """Create customer cohort retention matrix"""
+        # Create cohort groups
+        self.data['CohortDate'] = self.data.groupby('CustomerID')['InvoiceDate'].transform('min').dt.to_period('M')
+        self.data['TransactionPeriod'] = self.data['InvoiceDate'].dt.to_period('M')
+        
+        # Calculate cohort periods
+        self.data['CohortPeriod'] = (
+            self.data['TransactionPeriod'] - 
+            self.data['CohortDate']
+        ).apply(lambda x: x.n)
+        
+        # Create cohort matrix
+        cohort_data = self.data.groupby(['CohortDate', 'CohortPeriod'])['CustomerID'].nunique().reset_index()
+        cohort_matrix = cohort_data.pivot(
+            index='CohortDate',
+            columns='CohortPeriod',
+            values='CustomerID'
+        )
+        
+        # Calculate retention rates
+        cohort_sizes = cohort_matrix[0]
+        retention_matrix = cohort_matrix.div(cohort_sizes, axis=0) * 100
+        
+        return retention_matrix
+
+class ModelPersistence:
+    """Handle model saving and loading"""
+    
+    @staticmethod
+    def save_models(calculator: LifetimeValueCalculator, params: Dict, path: str = 'models/'):
+        """Save trained models and parameters"""
+        os.makedirs(path, exist_ok=True)
+        
+        # Save models
+        joblib.dump(calculator.bgf, f"{path}bgf_model.pkl")
+        joblib.dump(calculator.mbgf, f"{path}mbgf_model.pkl")
+        joblib.dump(calculator.ggf, f"{path}ggf_model.pkl")
+        
+        # Save parameters
+        model_params = ModelParameters(
+            penalizer_coef=calculator.bgf.penalizer_coef,
+            model_type="BG/NBD + GammaGamma",
+            training_date=datetime.now(),
+            metrics={
+                'bgf_log_likelihood': calculator.bgf.log_likelihood_,
+                'bgf_aic': calculator.bgf.AIC_,
+                'mbgf_log_likelihood': calculator.mbgf.log_likelihood_,
+                'mbgf_aic': calculator.mbgf.AIC_
+            }
+        )
+        
+        joblib.dump(model_params, f"{path}model_parameters.pkl")
+    
+    @staticmethod
+    def load_models(path: str = 'models/') -> Tuple[LifetimeValueCalculator, ModelParameters]:
+        """Load trained models and parameters"""
+        calculator = LifetimeValueCalculator()
+        
+        try:
+            calculator.bgf = joblib.load(f"{path}bgf_model.pkl")
+            calculator.mbgf = joblib.load(f"{path}mbgf_model.pkl")
+            calculator.ggf = joblib.load(f"{path}ggf_model.pkl")
+            model_params = joblib.load(f"{path}model_parameters.pkl")
+            
+            return calculator, model_params
+            
+        except FileNotFoundError:
+            logger.warning("No saved models found. Will train new models.")
+            return calculator, None
+
+def export_results(lf_data: pd.DataFrame, cohort_matrix: pd.DataFrame):
+    """Export analysis results to various formats"""
+    try:
+        # Create timestamp for unique filenames
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        
+        # Export customer analysis
+        lf_data.to_csv(f"exports/customer_analysis_{timestamp}.csv")
+        
+        # Export cohort analysis
+        cohort_matrix.to_csv(f"exports/cohort_analysis_{timestamp}.csv")
+        
+        # Create Excel report with multiple sheets
+        with pd.ExcelWriter(f"exports/clv_analysis_{timestamp}.xlsx") as writer:
+            lf_data.to_excel(writer, sheet_name='Customer Analysis')
+            cohort_matrix.to_excel(writer, sheet_name='Cohort Analysis')
+            
+            # Add summary statistics
+            summary_stats = pd.DataFrame({
+                'Metric': [
+                    'Average CLV',
+                    'Total Predicted Revenue',
+                    'High-Value Customers Count',
+                    'Average Retention Rate'
+                ],
+                'Value': [
+                    f"${lf_data['CLV_BGNBD'].mean():,.2f}",
+                    f"${lf_data['CLV_BGNBD'].sum():,.2f}",
+                    f"{(lf_data['CLV_BGNBD'] > lf_data['CLV_BGNBD'].quantile(0.9)).sum():,}",
+                    f"{cohort_matrix.mean().mean():.1f}%"
+                ]
+            })
+            summary_stats.to_excel(writer, sheet_name='Summary Statistics')
+            
+        st.success("Analysis results exported successfully!")
+        
+    except Exception as e:
+        logger.error(f"Error exporting results: {str(e)}")
+        st.error("Failed to export results. Please try again.")
 
 if __name__ == "__main__":
     main()
