@@ -16,6 +16,8 @@ from dataclasses import dataclass
 import joblib
 import os
 
+
+
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -278,6 +280,167 @@ def display_model_diagnostics(diagnostics: Dict[str, Optional[float]]):
     
     Note: 'Not available' indicates that the model either hasn't been successfully fit or the metric couldn't be calculated.
     """)
+
+# Add these imports at the top of the file
+from typing import Optional, Dict, Any
+import pickle
+from datetime import datetime
+import numpy as np
+
+class CohortAnalysis:
+    """Handle customer cohort analysis and retention calculations"""
+    
+    def __init__(self, transaction_data: pd.DataFrame):
+        self.data = transaction_data.copy()
+        self._prepare_data()
+    
+    def _prepare_data(self) -> None:
+        """Prepare transaction data for cohort analysis"""
+        # Convert InvoiceDate to datetime if needed
+        if not pd.api.types.is_datetime64_any_dtype(self.data['InvoiceDate']):
+            self.data['InvoiceDate'] = pd.to_datetime(self.data['InvoiceDate'])
+            
+        # Create cohort date (first purchase date for each customer)
+        self.data['CohortDate'] = self.data.groupby('CustomerID')['InvoiceDate'].transform('min')
+        
+        # Calculate cohort period (months since first purchase)
+        self.data['CohortPeriod'] = ((self.data['InvoiceDate'].dt.year - 
+                                     self.data['CohortDate'].dt.year) * 12 +
+                                    self.data['InvoiceDate'].dt.month - 
+                                    self.data['CohortDate'].dt.month)
+    
+    def create_cohort_matrix(self, max_periods: int = 12) -> pd.DataFrame:
+        """
+        Create cohort retention matrix
+        
+        Args:
+            max_periods: Maximum number of periods to include in analysis
+            
+        Returns:
+            DataFrame containing cohort retention rates
+        """
+        # Group data by cohort date and period
+        grouping = self.data.groupby(['CohortDate', 'CohortPeriod'])['CustomerID'].nunique()
+        cohort_data = grouping.reset_index()
+        
+        # Create cohort matrix
+        cohort_matrix = cohort_data.pivot(index='CohortDate', 
+                                        columns='CohortPeriod',
+                                        values='CustomerID')
+        
+        # Calculate retention rates
+        retention_matrix = cohort_matrix.div(cohort_matrix[0], axis=0) * 100
+        
+        # Limit to max_periods
+        retention_matrix = retention_matrix.iloc[:, :max_periods]
+        
+        # Format index to show cohort month and year
+        retention_matrix.index = retention_matrix.index.strftime('%Y-%m')
+        
+        return retention_matrix
+
+class ModelPersistence:
+    """Handle saving and loading of CLV models and parameters"""
+    
+    @staticmethod
+    def save_models(calculator: LifetimeValueCalculator, 
+                   params: Dict[str, Any], 
+                   path: str = "clv_models") -> None:
+        """
+        Save trained models and parameters
+        
+        Args:
+            calculator: Trained LifetimeValueCalculator instance
+            params: Dictionary of model parameters
+            path: Directory to save models
+        """
+        os.makedirs(path, exist_ok=True)
+        
+        # Create model metadata
+        metadata = ModelParameters(
+            penalizer_coef=calculator.bgf.penalizer_coef,
+            model_type="BG/NBD + GammaGamma",
+            training_date=datetime.now(),
+            metrics={
+                'bgf_log_likelihood': getattr(calculator.bgf, 'log_likelihood_', None),
+                'bgf_aic': getattr(calculator.bgf, 'AIC_', None),
+                'mbgf_log_likelihood': getattr(calculator.mbgf, 'log_likelihood_', None),
+                'mbgf_aic': getattr(calculator.mbgf, 'AIC_', None)
+            }
+        )
+        
+        # Save models and metadata
+        model_data = {
+            'bgf_model': calculator.bgf,
+            'mbgf_model': calculator.mbgf,
+            'ggf_model': calculator.ggf,
+            'metadata': metadata,
+            'parameters': params
+        }
+        
+        with open(os.path.join(path, f'clv_model_{datetime.now():%Y%m%d_%H%M%S}.pkl'), 'wb') as f:
+            pickle.dump(model_data, f)
+    
+    @staticmethod
+    def load_models(model_path: str) -> Tuple[LifetimeValueCalculator, Dict[str, Any], ModelParameters]:
+        """
+        Load saved models and parameters
+        
+        Args:
+            model_path: Path to saved model file
+            
+        Returns:
+            Tuple of (LifetimeValueCalculator, parameters dict, metadata)
+        """
+        with open(model_path, 'rb') as f:
+            model_data = pickle.load(f)
+            
+        calculator = LifetimeValueCalculator()
+        calculator.bgf = model_data['bgf_model']
+        calculator.mbgf = model_data['mbgf_model']
+        calculator.ggf = model_data['ggf_model']
+        
+        return calculator, model_data['parameters'], model_data['metadata']
+
+def export_results(lf_data: pd.DataFrame, cohort_matrix: pd.DataFrame) -> None:
+    """
+    Export analysis results to CSV files
+    
+    Args:
+        lf_data: Lifetime value analysis results
+        cohort_matrix: Cohort analysis results
+    """
+    # Create exports directory if it doesn't exist
+    os.makedirs('exports', exist_ok=True)
+    
+    # Export lifetime value analysis
+    lf_export = lf_data[[
+        'frequency', 'recency', 'T', 'monetary_value',
+        'CLV_BGNBD', 'CLV_Lower', 'CLV_Upper', 'Segment_Label'
+    ]]
+    lf_export.to_csv('exports/lifetime_value_analysis.csv', index=True)
+    
+    # Export cohort analysis
+    cohort_matrix.to_csv('exports/cohort_analysis.csv', index=True)
+    
+    # Create summary statistics
+    summary_stats = pd.DataFrame({
+        'Metric': [
+            'Average CLV',
+            'Total Predicted Revenue',
+            'Number of Customers',
+            'Average Order Frequency',
+            'Average Order Value'
+        ],
+        'Value': [
+            lf_data['CLV_BGNBD'].mean(),
+            lf_data['CLV_BGNBD'].sum(),
+            len(lf_data),
+            lf_data['frequency'].mean(),
+            lf_data['monetary_value'].mean()
+        ]
+    })
+    summary_stats.to_csv('exports/summary_statistics.csv', index=False)
 
 
 
