@@ -248,35 +248,36 @@ class LifetimeValueCalculator:
 
 def format_diagnostic_value(value: Optional[float]) -> str:
     """Format diagnostic values with proper null handling"""
-    if value is None:
-        return 'N/A'
+    if value is None or pd.isna(value):
+        return 'Not available'
     return f"{value:.2f}"
+
 
 def display_model_diagnostics(diagnostics: Dict[str, Optional[float]]):
     """Display model diagnostics with proper error handling"""
+    st.subheader('Model Diagnostics')
+    
+    # Create metrics in columns
     col1, col2 = st.columns(2)
 
     with col1:
         st.write("BG/NBD Model Performance")
-        st.metric(
-            "Log-likelihood",
-            format_diagnostic_value(diagnostics.get('bgf_log_likelihood'))
-        )
-        st.metric(
-            "AIC",
-            format_diagnostic_value(diagnostics.get('bgf_aic'))
-        )
+        st.write(f"Log-likelihood: {format_diagnostic_value(diagnostics.get('bgf_log_likelihood'))}")
+        st.write(f"AIC: {format_diagnostic_value(diagnostics.get('bgf_aic'))}")
 
     with col2:
         st.write("MBG/NBD Model Performance")
-        st.metric(
-            "Log-likelihood",
-            format_diagnostic_value(diagnostics.get('mbgf_log_likelihood'))
-        )
-        st.metric(
-            "AIC",
-            format_diagnostic_value(diagnostics.get('mbgf_aic'))
-        )
+        st.write(f"Log-likelihood: {format_diagnostic_value(diagnostics.get('mbgf_log_likelihood'))}")
+        st.write(f"AIC: {format_diagnostic_value(diagnostics.get('mbgf_aic'))}")
+
+    # Add explanation of metrics
+    st.markdown("""
+    #### Metrics Explanation:
+    - **Log-likelihood**: Higher values indicate better model fit
+    - **AIC (Akaike Information Criterion)**: Lower values indicate better model fit while accounting for model complexity
+    
+    Note: 'Not available' indicates that the model either hasn't been successfully fit or the metric couldn't be calculated.
+    """)
 
 
 
@@ -392,45 +393,80 @@ class DashboardUI:
         st.plotly_chart(fig, use_container_width=True)
 
 def main():
-    # Initialize components
-    ui = DashboardUI()
-    preprocessor = DataPreprocessor()
-    
+    """Main function for the CLV analysis dashboard"""
     try:
-        # Load and preprocess data
-        raw_data = pd.read_csv("OnlineRetail.csv", encoding="cp1252")
-        preprocessor.validate_data(raw_data)
-        clean_data = preprocessor.clean_transactions(raw_data)
+        # Initialize components
+        ui = DashboardUI()
+        preprocessor = DataPreprocessor()
         
-        # Get analysis parameters
-        params = ui.render_sidebar_controls()
-        
-        # Create lifetime value summary
-        observation_period_end = clean_data['InvoiceDate'].max()
-        lf_data = summary_data_from_transaction_data(
-            clean_data,
-            'CustomerID',
-            'InvoiceDate',
-            monetary_value_col='Total_Sales',
-            observation_period_end=observation_period_end
-        )
-        
-        # Perform customer segmentation
-        segmentation = CustomerSegmentation(n_clusters=params['n_clusters'])
-        lf_data = segmentation.create_rfm_segments(lf_data)
-        
-        # Calculate CLV
-        calculator = LifetimeValueCalculator()
-        calculator.fit_models(lf_data)
-        lf_data = calculator.calculate_clv(
-            lf_data,
-            time_horizon=params['prediction_period'],
-            discount_rate=params['discount_rate']
-        )
-        
-        # Display visualizations
         st.title('Advanced Customer Lifetime Value Analysis')
         
+        # File uploader for data
+        uploaded_file = st.file_uploader("Upload your transaction data (CSV)", type=['csv'])
+        
+        if uploaded_file is None:
+            st.info("Please upload your transaction data to begin the analysis.")
+            st.markdown("""
+            #### Expected CSV format:
+            - CustomerID
+            - InvoiceDate
+            - Quantity
+            - UnitPrice
+            
+            Other columns will be ignored.
+            """)
+            return
+            
+        # Load and preprocess data with progress indicator
+        with st.spinner('Loading and preprocessing data...'):
+            try:
+                raw_data = pd.read_csv(uploaded_file, encoding="cp1252")
+                preprocessor.validate_data(raw_data)
+                clean_data = preprocessor.clean_transactions(raw_data)
+            except UnicodeDecodeError:
+                st.error("Error reading the file. Please ensure it's in the correct encoding format.")
+                return
+            except ValueError as e:
+                st.error(f"Data validation error: {str(e)}")
+                return
+            except Exception as e:
+                st.error(f"Error processing data: {str(e)}")
+                return
+        
+        # Get analysis parameters from sidebar
+        params = ui.render_sidebar_controls()
+        
+        # Create lifetime value summary with progress indicator
+        with st.spinner('Calculating customer metrics...'):
+            observation_period_end = clean_data['InvoiceDate'].max()
+            lf_data = summary_data_from_transaction_data(
+                clean_data,
+                'CustomerID',
+                'InvoiceDate',
+                monetary_value_col='Total_Sales',
+                observation_period_end=observation_period_end
+            )
+        
+        # Perform customer segmentation
+        with st.spinner('Performing customer segmentation...'):
+            segmentation = CustomerSegmentation(n_clusters=params['n_clusters'])
+            lf_data = segmentation.create_rfm_segments(lf_data)
+        
+        # Calculate CLV
+        with st.spinner('Calculating Customer Lifetime Values...'):
+            calculator = LifetimeValueCalculator()
+            try:
+                calculator.fit_models(lf_data)
+                lf_data = calculator.calculate_clv(
+                    lf_data,
+                    time_horizon=params['prediction_period'],
+                    discount_rate=params['discount_rate']
+                )
+            except Exception as e:
+                st.error(f"Error in CLV calculations: {str(e)}")
+                return
+        
+        # Display key metrics
         col1, col2, col3 = st.columns(3)
         with col1:
             st.metric(
@@ -457,6 +493,10 @@ def main():
         st.subheader('CLV Distribution Analysis')
         ui.plot_clv_distribution(lf_data)
         
+        # Display model diagnostics
+        diagnostics = calculator.get_model_diagnostics()
+        display_model_diagnostics(diagnostics)
+        
         # Display top customers table
         st.subheader('Top Customers by Predicted CLV')
         top_customers = lf_data.nlargest(10, 'CLV_BGNBD')
@@ -475,163 +515,63 @@ def main():
             })
         )
         
-        st.subheader('Model Diagnostics')
-    
-        # Get model diagnostics
-        diagnostics = calculator.get_model_diagnostics()
-    
-        # Display diagnostics using the new function
-        display_model_diagnostics(diagnostics)
-        
-        # Compare BG/NBD vs MBG/NBD performance
-        col1, col2 = st.columns(2)
-        with col1:
-            st.write("BG/NBD Model Performance")
-            st.write(f"Log-likelihood: {diagnostics['bgf_log_likelihood']:.2f if diagnostics['bgf_log_likelihood'] is not None else 'N/A'}")
-            st.write(f"AIC: {diagnostics['bgf_aic']:.2f if diagnostics['bgf_aic'] is not None else 'N/A'}")
-            
-        with col2:
-            st.write("MBG/NBD Model Performance")
-            st.write(f"Log-likelihood: {diagnostics['mbgf_log_likelihood']:.2f if diagnostics['mbgf_log_likelihood'] is not None else 'N/A'}")
-            st.write(f"AIC: {diagnostics['mbgf_aic']:.2f if diagnostics['mbgf_aic'] is not None else 'N/A'}")
-        
-        # Add customer cohort analysis
+        # Add cohort analysis
         st.subheader('Cohort Analysis')
-        cohort_analysis = CohortAnalysis(clean_data)
-        cohort_matrix = cohort_analysis.create_cohort_matrix()
-        
-        # Plot cohort heatmap
-        fig = px.imshow(
-            cohort_matrix,
-            labels=dict(x="Cohort Period", y="Cohort Group", color="Retention Rate"),
-            title="Customer Cohort Analysis"
-        )
-        st.plotly_chart(fig, use_container_width=True)
+        with st.spinner('Performing cohort analysis...'):
+            try:
+                cohort_analysis = CohortAnalysis(clean_data)
+                cohort_matrix = cohort_analysis.create_cohort_matrix()
+                
+                # Plot cohort heatmap
+                fig = px.imshow(
+                    cohort_matrix,
+                    labels=dict(x="Cohort Period", y="Cohort Group", color="Retention Rate"),
+                    title="Customer Cohort Analysis"
+                )
+                st.plotly_chart(fig, use_container_width=True)
+            except Exception as e:
+                st.warning(f"Could not generate cohort analysis: {str(e)}")
         
         # Add export functionality
+        st.subheader('Export Results')
         if st.button('Export Analysis Results'):
-            export_results(lf_data, cohort_matrix)
+            try:
+                with st.spinner('Exporting results...'):
+                    export_results(lf_data, cohort_matrix)
+            except Exception as e:
+                st.error(f"Error exporting results: {str(e)}")
+        
+        # Add save model functionality
+        st.subheader('Save Model')
+        if st.button('Save Current Model'):
+            try:
+                with st.spinner('Saving model...'):
+                    ModelPersistence.save_models(calculator, params)
+                st.success('Model saved successfully!')
+            except Exception as e:
+                st.error(f"Error saving model: {str(e)}")
+        
+        # Add feedback section
+        st.subheader('Feedback')
+        st.markdown("""
+        If you have any feedback or suggestions for improving this analysis, 
+        please use the feedback form below.
+        """)
+        feedback = st.text_area("Your feedback:", height=100)
+        if st.button('Submit Feedback'):
+            # Here you would typically save the feedback to a database
+            st.success('Thank you for your feedback!')
             
     except Exception as e:
         logger.error(f"Error in main execution: {str(e)}")
-        st.error(f"An error occurred: {str(e)}")
-
-class CohortAnalysis:
-    """Handle customer cohort analysis"""
-    
-    def __init__(self, transaction_data: pd.DataFrame):
-        self.data = transaction_data
+        st.error("""
+        An unexpected error occurred while running the analysis. 
+        Please check your input data and try again.
         
-    def create_cohort_matrix(self) -> pd.DataFrame:
-        """Create customer cohort retention matrix"""
-        # Create cohort groups
-        self.data['CohortDate'] = self.data.groupby('CustomerID')['InvoiceDate'].transform('min').dt.to_period('M')
-        self.data['TransactionPeriod'] = self.data['InvoiceDate'].dt.to_period('M')
-        
-        # Calculate cohort periods
-        self.data['CohortPeriod'] = (
-            self.data['TransactionPeriod'] - 
-            self.data['CohortDate']
-        ).apply(lambda x: x.n)
-        
-        # Create cohort matrix
-        cohort_data = self.data.groupby(['CohortDate', 'CohortPeriod'])['CustomerID'].nunique().reset_index()
-        cohort_matrix = cohort_data.pivot(
-            index='CohortDate',
-            columns='CohortPeriod',
-            values='CustomerID'
-        )
-        
-        # Calculate retention rates
-        cohort_sizes = cohort_matrix[0]
-        retention_matrix = cohort_matrix.div(cohort_sizes, axis=0) * 100
-        
-        return retention_matrix
-
-class ModelPersistence:
-    """Handle model saving and loading"""
-    
-    @staticmethod
-    def save_models(calculator: LifetimeValueCalculator, params: Dict, path: str = 'models/'):
-        """Save trained models and parameters"""
-        os.makedirs(path, exist_ok=True)
-        
-        # Save models
-        joblib.dump(calculator.bgf, f"{path}bgf_model.pkl")
-        joblib.dump(calculator.mbgf, f"{path}mbgf_model.pkl")
-        joblib.dump(calculator.ggf, f"{path}ggf_model.pkl")
-        
-        # Save parameters
-        model_params = ModelParameters(
-            penalizer_coef=calculator.bgf.penalizer_coef,
-            model_type="BG/NBD + GammaGamma",
-            training_date=datetime.now(),
-            metrics={
-                'bgf_log_likelihood': calculator.bgf.log_likelihood_,
-                'bgf_aic': calculator.bgf.AIC_,
-                'mbgf_log_likelihood': calculator.mbgf.log_likelihood_,
-                'mbgf_aic': calculator.mbgf.AIC_
-            }
-        )
-        
-        joblib.dump(model_params, f"{path}model_parameters.pkl")
-    
-    @staticmethod
-    def load_models(path: str = 'models/') -> Tuple[LifetimeValueCalculator, ModelParameters]:
-        """Load trained models and parameters"""
-        calculator = LifetimeValueCalculator()
-        
-        try:
-            calculator.bgf = joblib.load(f"{path}bgf_model.pkl")
-            calculator.mbgf = joblib.load(f"{path}mbgf_model.pkl")
-            calculator.ggf = joblib.load(f"{path}ggf_model.pkl")
-            model_params = joblib.load(f"{path}model_parameters.pkl")
-            
-            return calculator, model_params
-            
-        except FileNotFoundError:
-            logger.warning("No saved models found. Will train new models.")
-            return calculator, None
-
-def export_results(lf_data: pd.DataFrame, cohort_matrix: pd.DataFrame):
-    """Export analysis results to various formats"""
-    try:
-        # Create timestamp for unique filenames
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        
-        # Export customer analysis
-        lf_data.to_csv(f"exports/customer_analysis_{timestamp}.csv")
-        
-        # Export cohort analysis
-        cohort_matrix.to_csv(f"exports/cohort_analysis_{timestamp}.csv")
-        
-        # Create Excel report with multiple sheets
-        with pd.ExcelWriter(f"exports/clv_analysis_{timestamp}.xlsx") as writer:
-            lf_data.to_excel(writer, sheet_name='Customer Analysis')
-            cohort_matrix.to_excel(writer, sheet_name='Cohort Analysis')
-            
-            # Add summary statistics
-            summary_stats = pd.DataFrame({
-                'Metric': [
-                    'Average CLV',
-                    'Total Predicted Revenue',
-                    'High-Value Customers Count',
-                    'Average Retention Rate'
-                ],
-                'Value': [
-                    f"${lf_data['CLV_BGNBD'].mean():,.2f}",
-                    f"${lf_data['CLV_BGNBD'].sum():,.2f}",
-                    f"{(lf_data['CLV_BGNBD'] > lf_data['CLV_BGNBD'].quantile(0.9)).sum():,}",
-                    f"{cohort_matrix.mean().mean():.1f}%"
-                ]
-            })
-            summary_stats.to_excel(writer, sheet_name='Summary Statistics')
-            
-        st.success("Analysis results exported successfully!")
-        
-    except Exception as e:
-        logger.error(f"Error exporting results: {str(e)}")
-        st.error("Failed to export results. Please try again.")
+        If the problem persists, please contact support.
+        """)
+        if st.checkbox('Show error details'):
+            st.error(str(e))
 
 if __name__ == "__main__":
     main()
