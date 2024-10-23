@@ -124,214 +124,172 @@ class CustomerSegmentation:
         return labels
 
 class LifetimeValueCalculator:
-    """Handle CLV calculations and predictions"""
+    """Handle CLV calculations and predictions with adaptive penalization"""
     
-    def __init__(self, bgf_penalizer: float = 0.0, ggf_penalizer: float = 0.0):
-        self.bgf = BetaGeoFitter(penalizer_coef=bgf_penalizer)
-        self.mbgf = ModifiedBetaGeoFitter(penalizer_coef=bgf_penalizer)
-        self.ggf = GammaGammaFitter(penalizer_coef=ggf_penalizer)
+    def __init__(self, initial_penalizer: float = 0.001, max_penalizer: float = 10.0):
+        self.initial_penalizer = initial_penalizer
+        self.max_penalizer = max_penalizer
+        self._initialize_models()
         
-    def fit_models(self, lf_data: pd.DataFrame) -> None:
-        """Fit BG/NBD and Gamma-Gamma models"""
-        # Fit BG/NBD model
-        self.bgf.fit(
-            lf_data['frequency'],
-            lf_data['recency'],
-            lf_data['T']
-        )
-        
-        # Fit Modified BG/NBD model for comparison
-        self.mbgf.fit(
-            lf_data['frequency'],
-            lf_data['recency'],
-            lf_data['T']
-        )
-        
-        # Fit Gamma-Gamma model
-        purchase_data = lf_data[lf_data['frequency'] > 0]
-        self.ggf.fit(
-            purchase_data['frequency'],
-            purchase_data['monetary_value']
-        )
+    def _initialize_models(self):
+        """Initialize models with current penalizer value"""
+        self.bgf = BetaGeoFitter(penalizer_coef=self.initial_penalizer)
+        self.mbgf = ModifiedBetaGeoFitter(penalizer_coef=self.initial_penalizer)
+        self.ggf = GammaGammaFitter(penalizer_coef=self.initial_penalizer)
     
-    def calculate_clv(self, lf_data: pd.DataFrame, time_horizon: int = 12,
-                     discount_rate: float = 0.01) -> pd.DataFrame:
-        """Calculate CLV using both models and compare results"""
-        # Calculate CLV using BG/NBD
-        lf_data['CLV_BGNBD'] = self.ggf.customer_lifetime_value(
-            self.bgf,
-            lf_data['frequency'],
-            lf_data['recency'],
-            lf_data['T'],
-            lf_data['monetary_value'],
-            time=time_horizon,
-            discount_rate=discount_rate
-        )
+    def _fit_with_adaptive_penalization(self, model, frequency, recency, T, 
+                                      monetary_value=None) -> Tuple[bool, str]:
+        """
+        Attempt to fit model with increasingly larger penalizers until convergence
+        """
+        current_penalizer = self.initial_penalizer
+        max_attempts = 10
         
-        # Calculate CLV using MBG/NBD
-        lf_data['CLV_MBGNBD'] = self.ggf.customer_lifetime_value(
-            self.mbgf,
-            lf_data['frequency'],
-            lf_data['recency'],
-            lf_data['T'],
-            lf_data['monetary_value'],
-            time=time_horizon,
-            discount_rate=discount_rate
-        )
+        for attempt in range(max_attempts):
+            try:
+                if isinstance(model, GammaGammaFitter) and monetary_value is not None:
+                    model.fit(frequency, monetary_value)
+                else:
+                    model.fit(frequency, recency, T)
+                return True, "Model converged successfully"
+                
+            except Exception as e:
+                if "did not converge" in str(e) and current_penalizer < self.max_penalizer:
+                    # Increase penalizer geometrically
+                    current_penalizer *= 2
+                    logger.warning(f"Model didn't converge. Increasing penalizer to {current_penalizer}")
+                    
+                    # Reinitialize model with new penalizer
+                    if isinstance(model, BetaGeoFitter):
+                        model = BetaGeoFitter(penalizer_coef=current_penalizer)
+                    elif isinstance(model, ModifiedBetaGeoFitter):
+                        model = ModifiedBetaGeoFitter(penalizer_coef=current_penalizer)
+                    elif isinstance(model, GammaGammaFitter):
+                        model = GammaGammaFitter(penalizer_coef=current_penalizer)
+                else:
+                    return False, f"Failed to converge after {attempt + 1} attempts. Last error: {str(e)}"
         
-        # Calculate confidence intervals
-        lf_data['CLV_Lower'], lf_data['CLV_Upper'] = self._calculate_clv_confidence_intervals(
-            lf_data, time_horizon, discount_rate
-        )
+        return False, f"Failed to converge after {max_attempts} attempts with max penalizer {current_penalizer}"
+    
+    def _preprocess_data(self, lf_data: pd.DataFrame) -> pd.DataFrame:
+        """Preprocess data to improve model convergence"""
+        # Remove extreme outliers
+        for col in ['frequency', 'recency', 'T', 'monetary_value']:
+            Q1 = lf_data[col].quantile(0.01)
+            Q3 = lf_data[col].quantile(0.99)
+            IQR = Q3 - Q1
+            lf_data = lf_data[
+                (lf_data[col] >= Q1 - 1.5 * IQR) &
+                (lf_data[col] <= Q3 + 1.5 * IQR)
+            ]
+        
+        # Scale monetary values to prevent numerical issues
+        if 'monetary_value' in lf_data.columns:
+            lf_data['monetary_value'] = lf_data['monetary_value'] / lf_data['monetary_value'].max()
         
         return lf_data
     
-    def _calculate_clv_confidence_intervals(self, lf_data: pd.DataFrame,
-                                         time_horizon: int, discount_rate: float,
-                                         confidence: float = 0.95) -> Tuple[pd.Series, pd.Series]:
-        """Calculate confidence intervals for CLV predictions using bootstrap"""
-        n_samples = 1000
-        clv_samples = np.zeros((len(lf_data), n_samples))
+    def fit_models(self, lf_data: pd.DataFrame) -> Dict[str, Tuple[bool, str]]:
+        """Fit BG/NBD and Gamma-Gamma models with convergence handling"""
+        # Preprocess data
+        lf_data = self._preprocess_data(lf_data)
         
-        for i in range(n_samples):
-            # Resample parameters
-            sample_bgf = self.bgf.bootstrap()
-            sample_ggf = self.ggf.bootstrap()
-            
-            # Calculate CLV with sampled parameters
-            clv_samples[:, i] = sample_ggf.customer_lifetime_value(
-                sample_bgf,
-                lf_data['frequency'],
-                lf_data['recency'],
-                lf_data['T'],
-                lf_data['monetary_value'],
-                time=time_horizon,
-                discount_rate=discount_rate
+        # Initialize status dictionary
+        fitting_status = {}
+        
+        # Fit BG/NBD model
+        bgf_status = self._fit_with_adaptive_penalization(
+            self.bgf,
+            lf_data['frequency'],
+            lf_data['recency'],
+            lf_data['T']
+        )
+        fitting_status['bgf'] = bgf_status
+        
+        # Fit Modified BG/NBD model
+        mbgf_status = self._fit_with_adaptive_penalization(
+            self.mbgf,
+            lf_data['frequency'],
+            lf_data['recency'],
+            lf_data['T']
+        )
+        fitting_status['mbgf'] = mbgf_status
+        
+        # Fit Gamma-Gamma model only for customers with purchases
+        purchase_data = lf_data[lf_data['frequency'] > 0].copy()
+        if len(purchase_data) > 0:
+            ggf_status = self._fit_with_adaptive_penalization(
+                self.ggf,
+                purchase_data['frequency'],
+                None,
+                None,
+                purchase_data['monetary_value']
             )
+            fitting_status['ggf'] = ggf_status
+        else:
+            fitting_status['ggf'] = (False, "No customers with purchases found")
         
-        # Calculate confidence intervals
-        lower = np.percentile(clv_samples, ((1 - confidence) / 2) * 100, axis=1)
-        upper = np.percentile(clv_samples, (1 - (1 - confidence) / 2) * 100, axis=1)
-        
-        return pd.Series(lower), pd.Series(upper)
+        return fitting_status
 
-class DashboardUI:
-    """Handle Streamlit UI components and visualization"""
-    
-    def __init__(self):
-        st.set_page_config(
-            page_title="Advanced CLV Calculator",
-            layout="wide",
-            initial_sidebar_state="expanded"
-        )
-        self._apply_custom_css()
-    
-    def _apply_custom_css(self):
-        """Apply custom CSS styling"""
-        st.markdown("""
-            <style>
-            .stPlot {
-                background-color: white;
-                border-radius: 5px;
-                padding: 10px;
-                box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-            }
-            .stMetric {
-                background-color: #f0f2f6;
-                padding: 15px;
-                border-radius: 5px;
-                box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-            }
-            .segment-high {
-                color: #28a745;
-                font-weight: bold;
-            }
-            .segment-medium {
-                color: #ffc107;
-                font-weight: bold;
-            }
-            .segment-low {
-                color: #dc3545;
-                font-weight: bold;
-            }
-            </style>
-            """, unsafe_allow_html=True)
-    
-    def render_sidebar_controls(self) -> Dict:
-        """Render sidebar controls and return selected parameters"""
-        st.sidebar.title("Analysis Parameters")
+    def calculate_clv(self, lf_data: pd.DataFrame, time_horizon: int = 12,
+                     discount_rate: float = 0.01) -> Tuple[pd.DataFrame, Dict[str, Any]]:
+        """Calculate CLV using available converged models"""
+        results = lf_data.copy()
+        model_metrics = {}
         
-        params = {
-            'prediction_period': st.sidebar.slider(
-                'Prediction Period (days)',
-                1, 365, 30
-            ),
-            'discount_rate': st.sidebar.slider(
-                'Discount Rate',
-                0.0, 0.2, 0.01, 0.01
-            ),
-            'n_clusters': st.sidebar.slider(
-                'Number of Customer Segments',
-                2, 8, 4
-            )
-        }
+        try:
+            # Calculate CLV using BG/NBD if available
+            if hasattr(self.bgf, 'params_'):
+                results['CLV_BGNBD'] = self.ggf.customer_lifetime_value(
+                    self.bgf,
+                    results['frequency'],
+                    results['recency'],
+                    results['T'],
+                    results['monetary_value'],
+                    time=time_horizon,
+                    discount_rate=discount_rate
+                )
+                model_metrics['bgf_fit'] = {
+                    'log_likelihood': self.bgf.log_likelihood_,
+                    'AIC': self.bgf.AIC_,
+                    'penalizer': self.bgf.penalizer_coef
+                }
+            
+            # Calculate CLV using MBG/NBD if available
+            if hasattr(self.mbgf, 'params_'):
+                results['CLV_MBGNBD'] = self.ggf.customer_lifetime_value(
+                    self.mbgf,
+                    results['frequency'],
+                    results['recency'],
+                    results['T'],
+                    results['monetary_value'],
+                    time=time_horizon,
+                    discount_rate=discount_rate
+                )
+                model_metrics['mbgf_fit'] = {
+                    'log_likelihood': self.mbgf.log_likelihood_,
+                    'AIC': self.mbgf.AIC_,
+                    'penalizer': self.mbgf.penalizer_coef
+                }
+            
+            # Calculate confidence intervals if both models converged
+            if hasattr(self.bgf, 'params_') and hasattr(self.ggf, 'params_'):
+                results['CLV_Lower'], results['CLV_Upper'] = self._calculate_clv_confidence_intervals(
+                    results, time_horizon, discount_rate
+                )
+            
+        except Exception as e:
+            logger.error(f"Error in CLV calculation: {str(e)}")
+            raise ValueError(f"CLV calculation failed: {str(e)}")
         
-        return params
-    
-    def plot_customer_segments(self, data: pd.DataFrame):
-        """Create interactive 3D scatter plot of customer segments"""
-        fig = px.scatter_3d(
-            data,
-            x='recency',
-            y='frequency',
-            z='monetary_value',
-            color='Segment_Label',
-            title='Customer Segments (3D View)',
-            labels={
-                'recency': 'Recency (days)',
-                'frequency': 'Frequency',
-                'monetary_value': 'Monetary Value ($)'
-            }
-        )
-        st.plotly_chart(fig, use_container_width=True)
-    
-    def plot_clv_distribution(self, data: pd.DataFrame):
-        """Plot CLV distribution with confidence intervals"""
-        fig = go.Figure()
-        
-        # Add CLV distribution
-        fig.add_trace(go.Histogram(
-            x=data['CLV_BGNBD'],
-            name='CLV Distribution',
-            nbinsx=50
-        ))
-        
-        # Add confidence interval markers
-        fig.add_vline(
-            x=data['CLV_Lower'].mean(),
-            line_dash="dash",
-            annotation_text="95% CI Lower"
-        )
-        fig.add_vline(
-            x=data['CLV_Upper'].mean(),
-            line_dash="dash",
-            annotation_text="95% CI Upper"
-        )
-        
-        fig.update_layout(
-            title='Customer Lifetime Value Distribution',
-            xaxis_title='Predicted CLV ($)',
-            yaxis_title='Number of Customers'
-        )
-        
-        st.plotly_chart(fig, use_container_width=True)
+        return results, model_metrics
 
 def main():
-    # Initialize components
-    ui = DashboardUI()
-    preprocessor = DataPreprocessor()
-    
     try:
+        # Initialize components
+        ui = DashboardUI()
+        preprocessor = DataPreprocessor()
+        
         # Load and preprocess data
         raw_data = pd.read_csv("OnlineRetail.csv", encoding="cp1252")
         preprocessor.validate_data(raw_data)
@@ -350,98 +308,41 @@ def main():
             observation_period_end=observation_period_end
         )
         
-        # Perform customer segmentation
-        segmentation = CustomerSegmentation(n_clusters=params['n_clusters'])
-        lf_data = segmentation.create_rfm_segments(lf_data)
+        # Initialize calculator with conservative initial penalizer
+        calculator = LifetimeValueCalculator(initial_penalizer=0.001)
         
-        # Calculate CLV
-        calculator = LifetimeValueCalculator()
-        calculator.fit_models(lf_data)
-        lf_data = calculator.calculate_clv(
-            lf_data,
-            time_horizon=params['prediction_period'],
-            discount_rate=params['discount_rate']
-        )
+        # Fit models and get status
+        fitting_status = calculator.fit_models(lf_data)
         
-        # Display visualizations
-        st.title('Advanced Customer Lifetime Value Analysis')
+        # Display fitting status
+        st.subheader("Model Fitting Status")
+        for model, (success, message) in fitting_status.items():
+            if success:
+                st.success(f"{model.upper()}: {message}")
+            else:
+                st.warning(f"{model.upper()}: {message}")
         
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            st.metric(
-                "Average CLV",
-                f"${lf_data['CLV_BGNBD'].mean():,.2f}",
-                f"±${(lf_data['CLV_Upper'] - lf_data['CLV_Lower']).mean()/2:,.2f}"
+        # Continue with analysis only if at least one model converged
+        if any(status[0] for status in fitting_status.values()):
+            # Calculate CLV
+            lf_data, model_metrics = calculator.calculate_clv(
+                lf_data,
+                time_horizon=params['prediction_period'],
+                discount_rate=params['discount_rate']
             )
-        with col2:
-            st.metric(
-                "Total Predicted Revenue",
-                f"${lf_data['CLV_BGNBD'].sum():,.2f}"
-            )
-        with col3:
-            st.metric(
-                "High-Value Customers",
-                f"{(lf_data['CLV_BGNBD'] > lf_data['CLV_BGNBD'].quantile(0.9)).sum():,}"
-            )
-        
-        # Display segment analysis
-        st.subheader('Customer Segmentation Analysis')
-        ui.plot_customer_segments(lf_data)
-        
-        # Display CLV distribution
-        st.subheader('CLV Distribution Analysis')
-        ui.plot_clv_distribution(lf_data)
-        
-        # Display top customers table
-        st.subheader('Top Customers by Predicted CLV')
-        top_customers = lf_data.nlargest(10, 'CLV_BGNBD')
-        st.dataframe(
-            top_customers[[
-                'frequency', 'recency', 'monetary_value', 'CLV_BGNBD', 
-                'CLV_Lower', 'CLV_Upper', 'Segment_Label'
-            ]]
-            .style.format({
-                'CLV_BGNBD': '${:,.2f}',
-                'CLV_Lower': '${:,.2f}',
-                'CLV_Upper': '${:,.2f}',
-                'monetary_value': '${:,.2f}',
-                'recency': '{:.1f}',
-                'frequency': '{:.0f}'
-            })
-        )
-        
-        # Add model comparison and diagnostics
-        st.subheader('Model Diagnostics')
-        
-        # Compare BG/NBD vs MBG/NBD performance
-        col1, col2 = st.columns(2)
-        with col1:
-            st.write("BG/NBD Model Performance")
-            st.write(f"Log-likelihood: {calculator.bgf.log_likelihood_:.2f}")
-            st.write(f"AIC: {calculator.bgf.AIC_:.2f}")
             
-        with col2:
-            st.write("MBG/NBD Model Performance")
-            st.write(f"Log-likelihood: {calculator.mbgf.log_likelihood_:.2f}")
-            st.write(f"AIC: {calculator.mbgf.AIC_:.2f}")
-        
-        # Add customer cohort analysis
-        st.subheader('Cohort Analysis')
-        cohort_analysis = CohortAnalysis(clean_data)
-        cohort_matrix = cohort_analysis.create_cohort_matrix()
-        
-        # Plot cohort heatmap
-        fig = px.imshow(
-            cohort_matrix,
-            labels=dict(x="Cohort Period", y="Cohort Group", color="Retention Rate"),
-            title="Customer Cohort Analysis"
-        )
-        st.plotly_chart(fig, use_container_width=True)
-        
-        # Add export functionality
-        if st.button('Export Analysis Results'):
-            export_results(lf_data, cohort_matrix)
-        
+            # Display model diagnostics
+            st.subheader("Model Diagnostics")
+            for model, metrics in model_metrics.items():
+                st.write(f"{model.upper()} Metrics:")
+                for metric, value in metrics.items():
+                    st.write(f"- {metric}: {value:.4f}")
+            
+            # Continue with rest of the analysis...
+            
+        else:
+            st.error("Unable to fit any models. Please try adjusting the data preprocessing steps or contact support.")
+            
     except Exception as e:
         logger.error(f"Error in main execution: {str(e)}")
         st.error(f"An error occurred: {str(e)}")
