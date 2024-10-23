@@ -218,36 +218,38 @@ class LifetimeValueCalculator:
             logger.error(f"Error calculating CLV: {str(e)}")
             raise
 
-    def format_diagnostic_value(value: Optional[float]) -> str:
+
+
+def format_diagnostic_value(value: Optional[float]) -> str:
     """Format diagnostic values with proper null handling"""
     if value is None:
         return 'N/A'
     return f"{value:.2f}"
 
-    def display_model_diagnostics(diagnostics: Dict[str, Optional[float]]):
+def display_model_diagnostics(diagnostics: Dict[str, Optional[float]]):
     """Display model diagnostics with proper error handling"""
     col1, col2 = st.columns(2)
-    
+
     with col1:
         st.write("BG/NBD Model Performance")
         st.metric(
             "Log-likelihood",
-            format_diagnostic_value(diagnostics['bgf_log_likelihood'])
+            format_diagnostic_value(diagnostics.get('bgf_log_likelihood'))
         )
         st.metric(
             "AIC",
-            format_diagnostic_value(diagnostics['bgf_aic'])
+            format_diagnostic_value(diagnostics.get('bgf_aic'))
         )
-    
+
     with col2:
         st.write("MBG/NBD Model Performance")
         st.metric(
             "Log-likelihood",
-            format_diagnostic_value(diagnostics['mbgf_log_likelihood'])
+            format_diagnostic_value(diagnostics.get('mbgf_log_likelihood'))
         )
         st.metric(
             "AIC",
-            format_diagnostic_value(diagnostics['mbgf_aic'])
+            format_diagnostic_value(diagnostics.get('mbgf_aic'))
         )
 
 
