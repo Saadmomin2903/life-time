@@ -442,7 +442,8 @@ class CohortAnalysis:
         })
         summary_stats.to_csv('exports/summary_statistics.csv', index=False)
         class ModelDiagnostics:
-    """Handle model diagnostics with improved validation and error handling"""
+   
+        """Handle model diagnostics with improved validation and error handling"""
     
     @staticmethod
     def calculate_model_fit_metrics(model, data) -> Dict[str, float]:
