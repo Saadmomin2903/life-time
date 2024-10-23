@@ -449,7 +449,7 @@ def main():
             })
         )
         
-           st.subheader('Model Diagnostics')
+        st.subheader('Model Diagnostics')
     
         # Get model diagnostics
         diagnostics = calculator.get_model_diagnostics()
