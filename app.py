@@ -595,7 +595,7 @@ def display_enhanced_diagnostics(lifetime_calculator, data: pd.DataFrame):
 class DashboardUI:
     """Handle Streamlit UI components and visualization"""
     
-    def __init__(self):
+     def __init__(self):
         st.set_page_config(
             page_title="Advanced CLV Calculator",
             layout="wide",
@@ -617,6 +617,25 @@ class DashboardUI:
                 background-color: #f0f2f6;
                 padding: 15px;
                 border-radius: 5px;
+                box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            }
+            /* Updated metric styling */
+            [data-testid="stMetricLabel"] {
+                color: #2c3e50;
+                font-weight: 600;
+            }
+            [data-testid="stMetricValue"] {
+                color: #2c3e50;
+                font-weight: bold;
+            }
+            [data-testid="stMetricDelta"] {
+                color: #2c3e50;
+            }
+            /* Style for metric containers */
+            [data-testid="column"] > div > div > div > div {
+                background-color: white;
+                padding: 1rem;
+                border-radius: 0.5rem;
                 box-shadow: 0 2px 4px rgba(0,0,0,0.1);
             }
             .segment-high {
