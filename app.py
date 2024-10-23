@@ -218,37 +218,37 @@ class LifetimeValueCalculator:
             logger.error(f"Error calculating CLV: {str(e)}")
             raise
 
-    def get_model_diagnostics(self) -> Dict[str, float]:
-        """Get model diagnostics using correct attribute names"""
-        diagnostics = {}
-        
-        try:
-            # BG/NBD model diagnostics
-            diagnostics.update({
-                'bgf_log_likelihood': self.bgf.log_likelihood,  # Remove underscore
-                'bgf_aic': self.bgf.aic,  # Remove underscore and capitalize
-            })
-        except AttributeError as e:
-            logger.warning(f"Could not get BG/NBD diagnostics: {str(e)}")
-            diagnostics.update({
-                'bgf_log_likelihood': None,
-                'bgf_aic': None,
-            })
+    def format_diagnostic_value(value: Optional[float]) -> str:
+    """Format diagnostic values with proper null handling"""
+    if value is None:
+        return 'N/A'
+    return f"{value:.2f}"
 
-        try:
-            # MBG/NBD model diagnostics
-            diagnostics.update({
-                'mbgf_log_likelihood': self.mbgf.log_likelihood,  # Remove underscore
-                'mbgf_aic': self.mbgf.aic,  # Remove underscore and capitalize
-            })
-        except AttributeError as e:
-            logger.warning(f"Could not get MBG/NBD diagnostics: {str(e)}")
-            diagnostics.update({
-                'mbgf_log_likelihood': None,
-                'mbgf_aic': None,
-            })
-            
-        return diagnostics
+def display_model_diagnostics(diagnostics: Dict[str, Optional[float]]):
+    """Display model diagnostics with proper error handling"""
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.write("BG/NBD Model Performance")
+        st.metric(
+            "Log-likelihood",
+            format_diagnostic_value(diagnostics['bgf_log_likelihood'])
+        )
+        st.metric(
+            "AIC",
+            format_diagnostic_value(diagnostics['bgf_aic'])
+        )
+    
+    with col2:
+        st.write("MBG/NBD Model Performance")
+        st.metric(
+            "Log-likelihood",
+            format_diagnostic_value(diagnostics['mbgf_log_likelihood'])
+        )
+        st.metric(
+            "AIC",
+            format_diagnostic_value(diagnostics['mbgf_aic'])
+        )
 
 class DashboardUI:
     """Handle Streamlit UI components and visualization"""
