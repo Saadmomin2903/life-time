@@ -127,7 +127,6 @@ class LifetimeValueCalculator:
     """Handle CLV calculations and predictions with improved convergence handling"""
     
     def __init__(self, bgf_penalizer: float = 0.01, ggf_penalizer: float = 0.01):
-        # Increased default penalizer coefficients
         self.bgf = BetaGeoFitter(penalizer_coef=bgf_penalizer)
         self.mbgf = ModifiedBetaGeoFitter(penalizer_coef=bgf_penalizer)
         self.ggf = GammaGammaFitter(penalizer_coef=ggf_penalizer)
@@ -151,9 +150,7 @@ class LifetimeValueCalculator:
         
         # Try fitting BG/NBD model with increasing penalizers
         for attempt in range(max_attempts):
-            penalizer_multiplier = 2 ** attempt  # Double penalizer each attempt
-            
-            # Try BG/NBD model
+            penalizer_multiplier = 2 ** attempt
             if attempt_fit(self.bgf, lf_data['frequency'], lf_data['recency'], 
                          lf_data['T'], penalizer_multiplier):
                 break
@@ -163,8 +160,6 @@ class LifetimeValueCalculator:
         # Try fitting Modified BG/NBD model
         for attempt in range(max_attempts):
             penalizer_multiplier = 2 ** attempt
-            
-            # Try Modified BG/NBD model
             if attempt_fit(self.mbgf, lf_data['frequency'], lf_data['recency'],
                          lf_data['T'], penalizer_multiplier):
                 break
@@ -222,28 +217,38 @@ class LifetimeValueCalculator:
         except Exception as e:
             logger.error(f"Error calculating CLV: {str(e)}")
             raise
-    
-    def calculate_clv_confidence_intervals(self, lf_data: pd.DataFrame,
-                                        time_horizon: int, discount_rate: float,
-                                        n_bootstraps: int = 100) -> Tuple[pd.Series, pd.Series]:
-        """Calculate confidence intervals for CLV predictions using simplified approach"""
+
+    def get_model_diagnostics(self) -> Dict[str, float]:
+        """Get model diagnostics using correct attribute names"""
+        diagnostics = {}
+        
         try:
-            # Calculate mean CLV
-            mean_clv = lf_data['CLV_BGNBD']
+            # BG/NBD model diagnostics
+            diagnostics.update({
+                'bgf_log_likelihood': self.bgf.log_likelihood,  # Remove underscore
+                'bgf_aic': self.bgf.aic,  # Remove underscore and capitalize
+            })
+        except AttributeError as e:
+            logger.warning(f"Could not get BG/NBD diagnostics: {str(e)}")
+            diagnostics.update({
+                'bgf_log_likelihood': None,
+                'bgf_aic': None,
+            })
+
+        try:
+            # MBG/NBD model diagnostics
+            diagnostics.update({
+                'mbgf_log_likelihood': self.mbgf.log_likelihood,  # Remove underscore
+                'mbgf_aic': self.mbgf.aic,  # Remove underscore and capitalize
+            })
+        except AttributeError as e:
+            logger.warning(f"Could not get MBG/NBD diagnostics: {str(e)}")
+            diagnostics.update({
+                'mbgf_log_likelihood': None,
+                'mbgf_aic': None,
+            })
             
-            # Calculate standard deviation assuming normal distribution
-            std_clv = mean_clv * 0.1  # Assume 10% standard deviation
-            
-            # Calculate confidence intervals (95% confidence level)
-            lower_bound = mean_clv - (1.96 * std_clv)
-            upper_bound = mean_clv + (1.96 * std_clv)
-            
-            return lower_bound, upper_bound
-            
-        except Exception as e:
-            logger.error(f"Error calculating confidence intervals: {str(e)}")
-            # Return simplified confidence intervals if calculation fails
-            return lf_data['CLV_BGNBD'] * 0.8, lf_data['CLV_BGNBD'] * 1.2
+        return diagnostics
 
 class DashboardUI:
     """Handle Streamlit UI components and visualization"""
@@ -440,20 +445,22 @@ def main():
             })
         )
         
-        # Add model comparison and diagnostics
         st.subheader('Model Diagnostics')
+    
+    # Get model diagnostics
+    diagnostics = calculator.get_model_diagnostics()
+    
+    # Compare BG/NBD vs MBG/NBD performance
+    col1, col2 = st.columns(2)
+    with col1:
+        st.write("BG/NBD Model Performance")
+        st.write(f"Log-likelihood: {diagnostics['bgf_log_likelihood']:.2f if diagnostics['bgf_log_likelihood'] is not None else 'N/A'}")
+        st.write(f"AIC: {diagnostics['bgf_aic']:.2f if diagnostics['bgf_aic'] is not None else 'N/A'}")
         
-        # Compare BG/NBD vs MBG/NBD performance
-        col1, col2 = st.columns(2)
-        with col1:
-            st.write("BG/NBD Model Performance")
-            st.write(f"Log-likelihood: {calculator.bgf.log_likelihood_:.2f}")
-            st.write(f"AIC: {calculator.bgf.AIC_:.2f}")
-            
-        with col2:
-            st.write("MBG/NBD Model Performance")
-            st.write(f"Log-likelihood: {calculator.mbgf.log_likelihood_:.2f}")
-            st.write(f"AIC: {calculator.mbgf.AIC_:.2f}")
+    with col2:
+        st.write("MBG/NBD Model Performance")
+        st.write(f"Log-likelihood: {diagnostics['mbgf_log_likelihood']:.2f if diagnostics['mbgf_log_likelihood'] is not None else 'N/A'}")
+        st.write(f"AIC: {diagnostics['mbgf_aic']:.2f if diagnostics['mbgf_aic'] is not None else 'N/A'}")
         
         # Add customer cohort analysis
         st.subheader('Cohort Analysis')
