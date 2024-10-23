@@ -445,10 +445,13 @@ def main():
             })
         )
         
-        st.subheader('Model Diagnostics')
-        
+           st.subheader('Model Diagnostics')
+    
         # Get model diagnostics
         diagnostics = calculator.get_model_diagnostics()
+    
+        # Display diagnostics using the new function
+        display_model_diagnostics(diagnostics)
         
         # Compare BG/NBD vs MBG/NBD performance
         col1, col2 = st.columns(2)
